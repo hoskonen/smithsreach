@@ -1,9 +1,103 @@
 -- [SmithsReach/Core.lua] - minimal, cleaned
 SmithsReach = SmithsReach or {}
+SmithsReach._Session = SmithsReach._Session or { active = false }
+
+-- ----- Defaults (authoritative, safe) -----
+local DEFAULTS = {
+    Behavior = {
+        cloneOnOpen     = true,
+        returnLeftovers = false,
+        showTransferFX  = true,
+        verboseLogs     = true,
+    },
+    PullCaps = {
+        max_kinds = 12,
+        max_each  = 10,
+        max_total = 60,
+    },
+}
+
+-- shallow+deep fill without clobbering user config
+local function _deep_fill(dst, src)
+    for k, v in pairs(src) do
+        if type(v) == "table" then
+            if type(dst[k]) ~= "table" then dst[k] = {} end
+            _deep_fill(dst[k], v)
+        else
+            if dst[k] == nil then dst[k] = v end -- only fill when missing
+        end
+    end
+end
+
+-- Ensure config table exists (Config.lua should create it; this backs it up)
+SmithsReach.Config = SmithsReach.Config or {}
+_deep_fill(SmithsReach.Config, DEFAULTS)
+
+-- (optional) quick sanity log
+-- System.LogAlways("[SmithsReach] Config effective: kinds="..tostring(SmithsReach.Config.PullCaps.max_kinds))
+
+local function _filterMats(raw)
+    local out = {}
+    for cid, cnt in pairs(raw or {}) do
+        if SmithsReach.CraftingMats and SmithsReach.CraftingMats[cid] and cnt > 0 then
+            out[cid] = cnt
+        end
+    end
+    return out
+end
+
+-- Materials helpers (read-only) ---
+local function _matSnapshot(entity, label)
+    -- pick whichever snapshot function exists
+    local snapWith = SmithsReach.Stash and SmithsReach.Stash.SnapshotWithLog
+    local snapRaw  = SmithsReach.Stash and SmithsReach.Stash.Snapshot
+
+    if type(snapWith) == "function" then
+        -- WithLog takes (entity, label)
+        local ok, raw = xpcall(function()
+            return snapWith(entity, label)
+        end, debug.traceback)
+        if not ok then
+            System.LogAlways("[SmithsReach] _matSnapshot ERROR (" .. tostring(label) .. "):\n" .. tostring(raw))
+            return {}
+        end
+        return _filterMats(raw)
+    elseif type(snapRaw) == "function" then
+        -- plain Snapshot takes (entity) only
+        local ok, raw, meta = xpcall(function()
+            return snapRaw(entity)
+        end, debug.traceback)
+        if not ok then
+            System.LogAlways("[SmithsReach] _matSnapshot ERROR (" .. tostring(label) .. "):\n" .. tostring(raw))
+            return {}
+        end
+        local function k(t)
+            local c = 0
+            for _ in pairs(t or {}) do c = c + 1 end
+            return c
+        end
+        System.LogAlways(("[SmithsReach][%s] Snapshot: entries=%s resolved=%s kinds=%d")
+            :format(label or "INV", tostring(meta and meta.entries or "?"),
+                tostring(meta and meta.resolved or "?"), k(raw)))
+        return _filterMats(raw)
+    else
+        System.LogAlways("[SmithsReach] _matSnapshot: no Snapshot function available")
+        return {}
+    end
+end
+
+local function _sum(m)
+    local s = 0
+    for _, v in pairs(m or {}) do s = s + v end
+    return s
+end
+local function _k(m)
+    local c = 0
+    for _ in pairs(m or {}) do c = c + 1 end
+    return c
+end
 
 function SmithsReach.Init()
-    Script.ReloadScript("scripts/SmithsReach/Stash.lua")
-
     -- Stash-side commands
     System.AddCCommand("smithsreach_ping", "SmithsReach_Ping()", "Ping test")
     System.AddCCommand("smithsreach_stash_methods", "SmithsReach_StashMethods()", "Probe stash.inventory methods")
@@ -23,13 +117,63 @@ function SmithsReach.Init()
     -- Diff
     System.AddCCommand("smithsreach_diff_stash_pl", "SmithsReach_DiffStashPl()", "Diff stash vs player (class counts)")
 
+    -- Events
+    System.AddCCommand("smithsreach_craft_probe", "SmithsReach_CraftProbe()",
+        "Probe ApseCrafting* elements for OnShow/OnHide and FC_*")
+
+    -- Crafting FC hooks (ApseCraftingContent) ---
+    System.AddCCommand("smithsreach_craft_bind", "SmithsReach_CraftBind()",
+        "Bind to ApseCraftingContent fc_activateCrafting/fc_deactivateCrafting")
+
+    -- Config Dump
+    System.AddCCommand("smithsreach_config_dump", "SmithsReach_ConfigDump()", "Print effective SmithsReach config")
+
     if UIAction and UIAction.RegisterEventSystemListener then
         UIAction.RegisterEventSystemListener(SmithsReach, "System", "OnGameplayStarted", "OnGameplayStarted")
     end
+
+    -- Smithery hook (start of blacksmithing)
+    System.AddCCommand("smithsreach_hook_smithery", "SmithsReach_HookSmithery()",
+        "Wrap Smithery.OnUsed to detect minigame start")
+
+    -- Minigame end listeners
+    System.AddCCommand("smithsreach_hook_minigame", "SmithsReach_HookMinigame()", "Listen for minigame end events")
+
+    -- Temp Crafting Close
+    System.AddCCommand("smithsreach_craft_end", "SmithsReach_CraftEnd()",
+        "Manually simulate blacksmithing end for testing")
+
+    -- Where are my mats? (scan whitelist across stash & player)
+    System.AddCCommand("smithsreach_mats_where", "SmithsReach_MatsWhere()",
+        "Show counts for each known mat in stash vs player")
+
+    -- Find by substring in UI/DB name (to discover things like charcoal/ore/ingot)
+    System.AddCCommand("smithsreach_find", "SmithsReach_Find()", "Usage: smithsreach_find <substring>")
+
+    System.AddCCommand("smithsreach_hook_psh_end", "SmithsReach_HookPSHEnd()", "Wrap PlayerStateHandler end-of-minigame")
+
+    System.AddCCommand("smithsreach_scan_unmatched", "SmithsReach_ScanUnmatched()",
+        "List items in stash that are NOT in CraftingMats (up to 40)")
 end
 
-function SmithsReach:OnGameplayStarted(_, _, _)
+function SmithsReach.OnGameplayStarted(actionName, eventName, argTable)
     System.LogAlways("[SmithsReach] Initialized!")
+
+    if SmithsReach.Config and SmithsReach.Config.Behavior.verboseLogs then
+        System.LogAlways("[SmithsReach] Effective Config dump:")
+        local function dump(tbl, indent)
+            indent = indent or ""
+            for k, v in pairs(tbl) do
+                if type(v) == "table" then
+                    System.LogAlways(indent .. tostring(k) .. ":")
+                    dump(v, indent .. "  ")
+                else
+                    System.LogAlways(indent .. tostring(k) .. " = " .. tostring(v))
+                end
+            end
+        end
+        dump(SmithsReach.Config, "  ")
+    end
 end
 
 -- ---- Global wrappers (console-friendly) ----
@@ -56,6 +200,16 @@ function SmithsReach_InvSummary() SmithsReach.DebugInvSummary() end
 function SmithsReach_DiffStashPl() SmithsReach.DebugDiffStashPl() end
 
 function SmithsReach_PullOne() SmithsReach.DebugPullOne() end
+
+function SmithsReach_CraftProbe() SmithsReach.DebugCraftProbe() end
+
+function SmithsReach_CraftBind() SmithsReach.DebugCraftBind() end
+
+function SmithsReach_HookSmithery() SmithsReach.HookSmithery() end
+
+function SmithsReach_HookMinigame() SmithsReach.HookMinigame() end
+
+function SmithsReach_CraftEnd() SmithsReach._ForgeOnClose() end
 
 -- ---- Internals ----
 function SmithsReach.DebugPing()
@@ -244,5 +398,420 @@ function SmithsReach.DebugPullOne()
         System.LogAlways("[SmithsReach] pull_one: cloned " .. tostring(classId) .. " into player")
     else
         System.LogAlways("[SmithsReach] pull_one: player.inventory.CreateItem missing")
+    end
+end
+
+function SmithsReach.DebugCraftProbe()
+    if not UIAction then
+        System.LogAlways("[SmithsReach] craft_probe: UIAction not available")
+        return
+    end
+
+    local ids = {
+        "ApseCraftingContent",
+        "ApseCraftingList",
+        "ApseModalDialog",
+        -- a couple of likely fallbacks if the symbol name differs from file name
+        "CraftingContent", "CraftingList", "ModalDialog",
+    }
+
+    local function regElem(id, ev, tag, fn)
+        if UIAction.RegisterElementListener then
+            UIAction.RegisterElementListener(id, ev, tag .. "_" .. id, fn)
+        end
+    end
+
+    local function regFC(id, cb, tag, fn)
+        -- try both common callback registration names, if present in this build
+        if UIAction.RegisterFlashCallback then
+            UIAction.RegisterFlashCallback(id, cb, tag .. "_" .. id .. "_" .. cb, fn)
+        elseif UIAction.RegisterElementFCListener then
+            UIAction.RegisterElementFCListener(id, cb, tag .. "_" .. id .. "_" .. cb, fn)
+        end
+    end
+
+    for _, id in ipairs(ids) do
+        -- element show/hide
+        regElem(id, "OnShow", "[SmithsReach] CRAFT OnShow",
+            function() System.LogAlways("[SmithsReach] CRAFT OnShow: " .. id) end)
+        regElem(id, "OnHide", "[SmithsReach] CRAFT OnHide",
+            function() System.LogAlways("[SmithsReach] CRAFT OnHide: " .. id) end)
+
+        -- a couple of focus-y events sometimes used
+        regElem(id, "OnFocus", "[SmithsReach] CRAFT OnFocus",
+            function() System.LogAlways("[SmithsReach] CRAFT OnFocus: " .. id) end)
+        regElem(id, "OnFocusLost", "[SmithsReach] CRAFT OnFocusLost",
+            function() System.LogAlways("[SmithsReach] CRAFT OnFocusLost: " .. id) end)
+
+        -- Flash callbacks (case/variant coverage)
+        for _, cb in ipairs({ "FC_Open", "FC_Close", "fc_open", "fc_close", "Open", "Close" }) do
+            regFC(id, cb, "[SmithsReach] CRAFT FC", function(...)
+                System.LogAlways("[SmithsReach] CRAFT FC " .. cb .. ": " .. id)
+            end)
+        end
+    end
+
+    System.LogAlways("[SmithsReach] craft_probe: listeners registered on " .. #ids .. " ids")
+end
+
+-- optional: once you know the exact id, a targeted listener
+System.AddCCommand("smithsreach_craft_listen", "SmithsReach_CraftListen()", "Usage: smithsreach_craft_listen <ElementId>")
+function SmithsReach_CraftListen()
+    local args = System.GetCVarArg and System.GetCVarArg() or {}
+    local id = args[1]
+    if not id then
+        System.LogAlways("[SmithsReach] usage: smithsreach_craft_listen <ElementId>")
+        return
+    end
+    if not (UIAction and UIAction.RegisterElementListener) then
+        System.LogAlways("[SmithsReach] craft_listen: UIAction missing")
+        return
+    end
+    UIAction.RegisterElementListener(id, "OnShow", "SmithsReach_Forge_OnShow",
+        function() System.LogAlways("[SmithsReach] Forge UI OnShow (" .. id .. ")") end)
+    UIAction.RegisterElementListener(id, "OnHide", "SmithsReach_Forge_OnHide",
+        function() System.LogAlways("[SmithsReach] Forge UI OnHide (" .. id .. ")") end)
+    System.LogAlways("[SmithsReach] Forge listeners registered for '" .. id .. "'")
+end
+
+function SmithsReach.DebugCraftBind()
+    if not UIAction then
+        System.LogAlways("[SmithsReach] craft_bind: UIAction not available")
+        return
+    end
+
+    local id = "ApseCraftingContent"
+
+    local function regFC(cb, tag, fn)
+        -- Try both common registration APIs (build-dependent)
+        if UIAction.RegisterFlashCallback then
+            UIAction.RegisterFlashCallback(id, cb, tag .. "_" .. cb, fn)
+            return true
+        elseif UIAction.RegisterElementFCListener then
+            UIAction.RegisterElementFCListener(id, cb, tag .. "_" .. cb, fn)
+            return true
+        end
+        return false
+    end
+
+    local ok1 = regFC("fc_activateCrafting", "[SmithsReach] CRAFT",
+        function(anim) System.LogAlways("[SmithsReach] fc_activateCrafting anim=" .. tostring(anim)) end)
+    local ok2 = regFC("fc_deactivateCrafting", "[SmithsReach] CRAFT",
+        function(anim) System.LogAlways("[SmithsReach] fc_deactivateCrafting anim=" .. tostring(anim)) end)
+
+    -- Fallback: also listen to element show/hide (some builds emit these too)
+    if UIAction.RegisterElementListener then
+        UIAction.RegisterElementListener(id, "OnShow", "SmithsReach_CRAFT_OnShow",
+            function() System.LogAlways("[SmithsReach] CRAFT OnShow") end)
+        UIAction.RegisterElementListener(id, "OnHide", "SmithsReach_CRAFT_OnHide",
+            function() System.LogAlways("[SmithsReach] CRAFT OnHide") end)
+    end
+
+    System.LogAlways("[SmithsReach] craft_bind: bound to " ..
+        id .. " (fc_activate/ fc_deactivate; plus OnShow/OnHide fallback). "
+        .. "FC ok: " .. tostring(ok1 and ok2))
+end
+
+function SmithsReach.HookSmithery()
+    if not Smithery then
+        System.LogAlways("[SmithsReach] HookSmithery: Smithery table not found (load order?)")
+        return
+    end
+    if SmithsReach._orig_Smithery_OnUsed then
+        System.LogAlways("[SmithsReach] HookSmithery: already hooked")
+        return
+    end
+
+    local orig = Smithery.OnUsed
+    if type(orig) ~= "function" then
+        System.LogAlways("[SmithsReach] HookSmithery: Smithery.OnUsed is not a function")
+        return
+    end
+
+    SmithsReach._orig_Smithery_OnUsed = orig
+    Smithery.OnUsed = function(self, user, slot)
+        System.LogAlways("[SmithsReach] Blacksmithing BEGIN (Smithery.OnUsed)")
+        -- our future entry-point:
+        if SmithsReach._ForgeOnOpen then
+            local ok, err = xpcall(SmithsReach._ForgeOnOpen, debug.traceback)
+            if not ok then
+                System.LogAlways("[SmithsReach] _ForgeOnOpen ERROR:\n" .. tostring(err))
+            end
+        end
+        -- call vanilla
+        return orig(self, user, slot)
+    end
+
+    System.LogAlways("[SmithsReach] HookSmithery: OK (OnUsed wrapped)")
+end
+
+function SmithsReach.HookMinigame()
+    if not (UIAction and UIAction.RegisterEventSystemListener) then
+        System.LogAlways("[SmithsReach] HookMinigame: UIAction listener API missing")
+        return
+    end
+
+    local function wrap(tag)
+        return function(...)
+            -- log args to discover the signature in this build
+            System.LogAlways("[SmithsReach] " .. tag .. " fired args=" .. tostring(select("#", ...)))
+            -- If we can read 'type' from args, gate on blacksmithing here.
+            -- For now, just call close unconditionally; we’ll refine after one capture.
+            if SmithsReach._ForgeOnClose then pcall(SmithsReach._ForgeOnClose) end
+        end
+    end
+
+    -- Try multiple buses & event names; harmless if some don’t exist:
+    UIAction.RegisterEventSystemListener(SmithsReach, "Minigame", "OnMinigameFinished", "SmithsReach_OnMgFinished",
+        wrap("OnMinigameFinished"))
+    UIAction.RegisterEventSystemListener(SmithsReach, "Minigame", "OnMinigameAborted", "SmithsReach_OnMgAborted",
+        wrap("OnMinigameAborted"))
+    UIAction.RegisterEventSystemListener(SmithsReach, "Minigame", "OnMinigameEnded", "SmithsReach_OnMgEnded",
+        wrap("OnMinigameEnded"))
+    UIAction.RegisterEventSystemListener(SmithsReach, "PlayerStateHandler", "OnMinigameFinished",
+        "SmithsReach_OnPshFinished", wrap("PSH.OnMinigameFinished"))
+
+    System.LogAlways("[SmithsReach] HookMinigame: listeners registered")
+end
+
+function SmithsReach._ForgeOnOpen()
+    System.LogAlways("[SmithsReach] _ForgeOnOpen: enter")
+
+    -- guarantee the session table exists (prevents nil index crash)
+    SmithsReach._Session = SmithsReach._Session or { active = false }
+
+    if SmithsReach._Session and SmithsReach._Session.active then
+        System.LogAlways("[SmithsReach] _ForgeOnOpen: already active");
+        return
+    end
+
+    if SmithsReach._Session.active then
+        System.LogAlways("[SmithsReach] _ForgeOnOpen: already active"); return
+    end
+    local stashEnt = SmithsReach.Stash.GetStash()
+    if not (stashEnt and stashEnt.inventory and player and player.inventory) then
+        System.LogAlways("[SmithsReach] _ForgeOnOpen: missing stash/player"); return
+    end
+
+    local P_before = _matSnapshot(player, "Player")
+    System.LogAlways("[SmithsReach] _ForgeOnOpen: after player snapshot")
+    local S_before = _matSnapshot(stashEnt, "Stash")
+    System.LogAlways("[SmithsReach] _ForgeOnOpen: after stash snapshot")
+
+    local cloned, clonedTotal = {}, 0
+    if SmithsReach.Config.Behavior.cloneOnOpen then
+        local caps = SmithsReach.Config.PullCaps
+        local kinds, total = 0, 0
+        for cid, cnt in pairs(S_before) do
+            local n = math.min(cnt, caps.max_each)
+            if n > 0 then
+                pcall(function() player.inventory:CreateItem(cid, n, 1) end)
+                if SmithsReach.Config.Behavior.showTransferFX and Game and Game.ShowItemsTransfer then
+                    pcall(function() Game.ShowItemsTransfer(cid, n) end)
+                end
+                cloned[cid] = n; clonedTotal = clonedTotal + n
+                kinds = kinds + 1; total = total + n
+                if kinds >= caps.max_kinds or total >= caps.max_total then break end
+            end
+        end
+    end
+
+    SmithsReach._Session = {
+        active = true,
+        stash_id = stashEnt.id,
+        P_before = P_before,
+        S_before = S_before,
+        cloned =
+            cloned
+    }
+
+    System.LogAlways(("[SmithsReach] OPEN: player %d/%d  stash %d/%d  cloned %d kinds / %d items")
+        :format(_k(P_before), _sum(P_before), _k(S_before), _sum(S_before), _k(cloned), clonedTotal))
+end
+
+function SmithsReach._ForgeOnClose()
+    local sess = SmithsReach._Session
+    if not (sess and sess.active) then
+        System.LogAlways("[SmithsReach] CLOSE: no active session"); return
+    end
+
+    local stashEnt = System.GetEntity and System.GetEntity(sess.stash_id)
+    if not (stashEnt and stashEnt.inventory and player and player.inventory) then
+        System.LogAlways("[SmithsReach] CLOSE: missing stash/player"); sess.active = false; return
+    end
+
+    local P_after, pk2, pt2 = _matSnapshot(player)
+    local S_after, sk2, st2 = _matSnapshot(stashEnt)
+
+    -- compute used per class, bounded by what we cloned
+    local used, leftover = {}, {}
+    for cid, clonedN in pairs(sess.cloned or {}) do
+        local beforeN = sess.P_before[cid] or 0
+        local afterN  = P_after[cid] or 0
+        local want    = math.max(0, (beforeN + clonedN) - afterN)
+        local u       = math.min(want, clonedN)
+        used[cid]     = u
+        leftover[cid] = clonedN - u
+    end
+
+    local usedSum, leftSum = _sum(used), _sum(leftover)
+
+    System.LogAlways(("[SmithsReach] CLOSE: Δplayer kinds=%+d items=%+d | used=%d leftover=%d")
+        :format(_k(P_after) - _k(sess.P_before), _sum(P_after) - _sum(sess.P_before), usedSum, leftSum))
+
+    -- print a few used rows for visibility
+    local shown = 0
+    for cid, n in pairs(used) do
+        if n > 0 then
+            local nm = (ItemManager and ItemManager.GetItemUIName and ItemManager.GetItemUIName(cid)) or tostring(cid)
+            System.LogAlways(("  used  %s x%d"):format(nm, n))
+            shown = shown + 1; if shown >= 20 then break end
+        end
+    end
+
+    -- (No mutation yet: we’re not removing from stash or cleaning leftovers here.)
+    sess.active = false
+end
+
+function SmithsReach_Find()
+    local args = System.GetCVarArg and System.GetCVarArg() or {}
+    local q = args[1]
+    if not q or q == "" then
+        System.LogAlways("[SmithsReach] usage: smithsreach_find <substring>"); return
+    end
+    q = string.lower(q)
+
+    local s = SmithsReach.Stash.GetStash()
+    if not (s and s.inventory) then
+        System.LogAlways("[SmithsReach] find: stash not found"); return
+    end
+    local S = SmithsReach.Stash.Snapshot(s)
+
+    local shown = 0
+    for cid, cnt in pairs(S) do
+        if cnt > 0 then
+            local ui, db = nil, nil
+            if ItemManager then
+                local okUi, uiName = pcall(function() return ItemManager.GetItemUIName(cid) end); if okUi then
+                    ui =
+                        uiName
+                end
+                local okDb, dbName = pcall(function() return ItemManager.GetItemName(cid) end); if okDb then
+                    db =
+                        dbName
+                end
+            end
+            local name = string.lower(tostring(ui or db or ""))
+            if name ~= "" and string.find(name, q, 1, true) then
+                System.LogAlways(("[SmithsReach] FIND %s (%s) x%d  class=%s"):format(tostring(ui or "?"),
+                    tostring(db or "?"), cnt, cid))
+                shown = shown + 1
+                if shown >= 60 then
+                    System.LogAlways("[SmithsReach] find: truncated"); break
+                end
+            end
+        end
+    end
+    if shown == 0 then System.LogAlways("[SmithsReach] find: no matches for '" .. q .. "' in stash") end
+end
+
+function SmithsReach_MatsWhere()
+    local s = SmithsReach.Stash.GetStash()
+    if not (s and s.inventory and player and player.inventory) then
+        System.LogAlways("[SmithsReach] mats_where: missing stash/player"); return
+    end
+    local S = SmithsReach.Stash.Snapshot(s)      -- all items by classId
+    local P = SmithsReach.Stash.Snapshot(player) -- all items by classId
+    local hits = 0
+    for cid, meta in pairs(SmithsReach.CraftingMats or {}) do
+        local sc = S[cid] or 0
+        local pc = P[cid] or 0
+        if sc > 0 or pc > 0 then
+            local name = meta.UIName or meta.Name or cid
+            System.LogAlways(("[SmithsReach] MAT %s  stash=%d  player=%d  class=%s"):format(tostring(name), sc, pc,
+                cid))
+            hits = hits + 1
+        end
+    end
+    if hits == 0 then System.LogAlways("[SmithsReach] mats_where: no Type=3 mats found in stash/player") end
+end
+
+function SmithsReach_HookPSHEnd()
+    if not PlayerStateHandler then
+        System.LogAlways("[SmithsReach] PSH hook: PlayerStateHandler not found")
+        return
+    end
+
+    -- try to wrap both; whichever exists will help
+    local function wrapIf(funcName)
+        local orig = PlayerStateHandler[funcName]
+        if type(orig) ~= "function" then return false end
+        if SmithsReach["_orig_PSH_" .. funcName] then return true end
+
+        SmithsReach["_orig_PSH_" .. funcName] = orig
+        PlayerStateHandler[funcName] = function(...)
+            local r = orig(...)
+            if SmithsReach._Session and SmithsReach._Session.active then
+                System.LogAlways("[SmithsReach] PSH " .. funcName .. " -> closing forge session")
+                pcall(function() SmithsReach._ForgeOnClose() end)
+            end
+            return r
+        end
+        return true
+    end
+
+    local any = wrapIf("EndMinigame") or wrapIf("FinishMinigame")
+    System.LogAlways("[SmithsReach] PSH hook: " .. (any and "OK" or "no target functions"))
+end
+
+function SmithsReach_ConfigDump()
+    local function dump(tbl, indent)
+        indent = indent or ""
+        for k, v in pairs(tbl) do
+            if type(v) == "table" then
+                System.LogAlways(indent .. tostring(k) .. ":")
+                dump(v, indent .. "  ")
+            else
+                System.LogAlways(indent .. tostring(k) .. " = " .. tostring(v))
+            end
+        end
+    end
+    System.LogAlways("[SmithsReach] Config dump:")
+    dump(SmithsReach.Config)
+end
+
+function SmithsReach.HookCraftingUI()
+    if not (UIAction and UIAction.RegisterElementListener) then return end
+    UIAction.RegisterElementListener("ApseCraftingContent", "OnHide",
+        "SmithsReach_Crafting_OnHide",
+        function()
+            if SmithsReach._Session and SmithsReach._Session.active then
+                System.LogAlways("[SmithsReach] Blacksmithing END (ApseCraftingContent.OnHide)")
+                pcall(SmithsReach._ForgeOnClose)
+            end
+        end
+    )
+    if SmithsReach.Config.Behavior.verboseLogs then
+        System.LogAlways("[SmithsReach] Hooked ApseCraftingContent.OnHide")
+    end
+end
+
+function SmithsReach_ScanUnmatched()
+    local s = SmithsReach.Stash.GetStash()
+    if not (s and s.inventory) then
+        System.LogAlways("[SmithsReach] scan_unmatched: no stash"); return
+    end
+    local raw = SmithsReach.Stash.SnapshotWithLog(s, "Stash")
+    local shown = 0
+    for cid, cnt in pairs(raw) do
+        if not SmithsReach.CraftingMats[cid] and cnt > 0 then
+            local ui = nil; if ItemManager and ItemManager.GetItemUIName then ui = ItemManager.GetItemUIName(cid) end
+            local db = nil; if ItemManager and ItemManager.GetItemName then db = ItemManager.GetItemName(cid) end
+            System.LogAlways(("[SmithsReach] UNMATCHED %s (%s) x%d  class=%s")
+                :format(tostring(ui or "?"), tostring(db or "?"), cnt, cid))
+            shown = shown + 1; if shown >= 40 then
+                System.LogAlways("[SmithsReach] scan_unmatched: truncated"); break
+            end
+        end
     end
 end
