@@ -134,4 +134,13 @@ function M.PrintSnapshotWithNames(invOrEntity, limit)
     end
 end
 
+function SmithsReach.IsMaterial(classId)
+    return SmithsReach.CraftingMats[classId] ~= nil
+end
+
+function SmithsReach.GetMaterialName(classId)
+    local e = SmithsReach.CraftingMats[classId]
+    return e and (e.UIName or e.Name or classId) or tostring(classId)
+end
+
 SmithsReach.Stash = M
