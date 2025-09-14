@@ -146,6 +146,10 @@ function SmithsReach.Init()
 
     System.AddCCommand("smithsreach_scan_unmatched", "SmithsReach_ScanUnmatched()",
         "List items in stash that are NOT in CraftingMats (up to 40)")
+
+    -- optional: once you know the exact id, a targeted listener
+    System.AddCCommand("smithsreach_craft_listen", "SmithsReach_CraftListen()",
+        "Usage: smithsreach_craft_listen <ElementId>")
 end
 
 function SmithsReach.OnGameplayStarted(actionName, eventName, argTable)
@@ -446,8 +450,6 @@ function SmithsReach.DebugCraftProbe()
     System.LogAlways("[SmithsReach] craft_probe: listeners registered on " .. #ids .. " ids")
 end
 
--- optional: once you know the exact id, a targeted listener
-System.AddCCommand("smithsreach_craft_listen", "SmithsReach_CraftListen()", "Usage: smithsreach_craft_listen <ElementId>")
 function SmithsReach_CraftListen()
     local args = System.GetCVarArg and System.GetCVarArg() or {}
     local id = args[1]
@@ -523,15 +525,19 @@ function SmithsReach.HookSmithery()
     SmithsReach._orig_Smithery_OnUsed = orig
     Smithery.OnUsed = function(self, user, slot)
         System.LogAlways("[SmithsReach] Blacksmithing BEGIN (Smithery.OnUsed)")
-        -- our future entry-point:
-        if SmithsReach._ForgeOnOpen then
-            local ok, err = xpcall(SmithsReach._ForgeOnOpen, debug.traceback)
+
+        -- Call our open with the actual station + args (pre-vanilla so mats are ready as UI mounts)
+        if type(SmithsReach._ForgeOnOpen) == "function" then
+            local ok, err = xpcall(function()
+                SmithsReach._ForgeOnOpen(self, user, slot) -- << pass station/user/slot
+            end, debug.traceback)
             if not ok then
                 System.LogAlways("[SmithsReach] _ForgeOnOpen ERROR:\n" .. tostring(err))
             end
         end
-        -- call vanilla
-        return orig(self, user, slot)
+
+        -- Call vanilla behavior (starts the minigame)
+        return orig(self, user, slot) -- note: colon-call semantics preserved
     end
 
     System.LogAlways("[SmithsReach] HookSmithery: OK (OnUsed wrapped)")
@@ -566,20 +572,15 @@ function SmithsReach.HookMinigame()
     System.LogAlways("[SmithsReach] HookMinigame: listeners registered")
 end
 
-function SmithsReach._ForgeOnOpen()
+function SmithsReach._ForgeOnOpen(stationEnt, user, slot)
     System.LogAlways("[SmithsReach] _ForgeOnOpen: enter")
 
-    -- guarantee the session table exists (prevents nil index crash)
-    SmithsReach._Session = SmithsReach._Session or { active = false }
-
+    -- soft-restart if left active
     if SmithsReach._Session and SmithsReach._Session.active then
-        System.LogAlways("[SmithsReach] _ForgeOnOpen: already active");
-        return
+        pcall(SmithsReach._ForgeOnClose)
     end
 
-    if SmithsReach._Session.active then
-        System.LogAlways("[SmithsReach] _ForgeOnOpen: already active"); return
-    end
+    -- Your existing stash retrieval stays as-is
     local stashEnt = SmithsReach.Stash.GetStash()
     if not (stashEnt and stashEnt.inventory and player and player.inventory) then
         System.LogAlways("[SmithsReach] _ForgeOnOpen: missing stash/player"); return
@@ -596,9 +597,6 @@ function SmithsReach._ForgeOnOpen()
             local n = math.min(cnt, caps.max_each)
             if n > 0 then
                 pcall(function() player.inventory:CreateItem(cid, n, 1) end)
-                if SmithsReach.Config.Behavior.showTransferFX and Game and Game.ShowItemsTransfer then
-                    pcall(function() Game.ShowItemsTransfer(cid, n) end)
-                end
                 cloned[cid] = n; clonedTotal = clonedTotal + n
                 kinds = kinds + 1; total = total + n
                 if kinds >= caps.max_kinds or total >= caps.max_total then break end
@@ -607,16 +605,19 @@ function SmithsReach._ForgeOnOpen()
     end
 
     SmithsReach._Session = {
-        active = true,
-        stash_id = stashEnt.id,
-        P_before = P_before,
-        S_before = S_before,
-        cloned =
-            cloned
+        active     = true,
+        station_id = stationEnt and stationEnt.id, -- << use this for proximity
+        stash_id   = stashEnt.id,                  -- unchanged: your master stash
+        player_id  = player and player.id,
+        P_before   = P_before,
+        S_before   = S_before,
+        cloned     = cloned,
     }
 
     System.LogAlways(("[SmithsReach] OPEN: player %d/%d  stash %d/%d  cloned %d kinds / %d items")
         :format(_k(P_before), _sum(P_before), _k(S_before), _sum(S_before), _k(cloned), clonedTotal))
+
+    SmithsReach._StartProximityClose()
 end
 
 function SmithsReach._ForgeOnClose()
@@ -653,7 +654,11 @@ function SmithsReach._ForgeOnClose()
     local shown = 0
     for cid, n in pairs(used) do
         if n > 0 then
-            local nm = (ItemManager and ItemManager.GetItemUIName and ItemManager.GetItemUIName(cid)) or tostring(cid)
+            local nm = tostring(cid)
+            if ItemManager and ItemManager.GetItemUIName then
+                local okNm, uiNm = pcall(function() return ItemManager.GetItemUIName(cid) end)
+                if okNm and uiNm then nm = uiNm end
+            end
             System.LogAlways(("  used  %s x%d"):format(nm, n))
             shown = shown + 1; if shown >= 20 then break end
         end
@@ -791,7 +796,7 @@ function SmithsReach_ScanUnmatched()
     if not (s and s.inventory) then
         System.LogAlways("[SmithsReach] scan_unmatched: no stash"); return
     end
-    local raw = SmithsReach.Stash.SnapshotWithLog(s, "Stash")
+    --local raw = SmithsReach.Stash.SnapshotWithLog(s, "Stash")
     local shown = 0
     for cid, cnt in pairs(raw) do
         if not SmithsReach.CraftingMats[cid] and cnt > 0 then
@@ -804,4 +809,54 @@ function SmithsReach_ScanUnmatched()
             end
         end
     end
+end
+
+-- Proximity-only close watcher
+
+local function _dist2(a, b)
+    local dx, dy, dz = a.x - b.x, a.y - b.y, a.z - b.z
+    return dx * dx + dy * dy + dz * dz
+end
+
+function SmithsReach._StartProximityClose()
+    local s = SmithsReach._Session
+    if not (s and s.active and s.station_id and s.player_id) then return end
+    if s._closeRunning then return end
+    s._closeRunning, s._awayTicks = true, 0
+
+    local cfg                     = SmithsReach.Config.Close or { distM = 2.0, graceTicks = 2, tickMs = 200 }
+    local dist2Limit              = (cfg.distM or 2.0) ^ 2
+    local grace                   = cfg.graceTicks or 2
+    local tickMs                  = cfg.tickMs or 200
+
+    local function tick()
+        if not (SmithsReach._Session and SmithsReach._Session.active) then
+            s._closeRunning = false; return
+        end
+        local station = System.GetEntity(s.station_id)
+        local pl      = System.GetEntity(s.player_id)
+        if not station or not pl then
+            s._closeRunning = false; return
+        end
+
+        local sp, pp = station:GetWorldPos(), pl:GetWorldPos()
+        if not sp or not pp then
+            s._closeRunning = false; return
+        end
+
+        if _dist2(pp, sp) >= dist2Limit then
+            s._awayTicks = s._awayTicks + 1
+            if s._awayTicks >= grace then
+                System.LogAlways(("[SmithsReach] END via proximity (>%.1fm)"):format(math.sqrt(dist2Limit)))
+                SmithsReach._ForgeOnClose()
+                s._closeRunning = false
+                return
+            end
+        else
+            s._awayTicks = 0
+        end
+        Script.SetTimer(tickMs, tick)
+    end
+
+    Script.SetTimer(tickMs, tick)
 end
