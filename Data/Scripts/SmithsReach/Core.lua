@@ -81,6 +81,7 @@ local function _sum(m)
     for _, v in pairs(m or {}) do s = s + v end
     return s
 end
+
 local function _k(m)
     local c = 0
     for _ in pairs(m or {}) do c = c + 1 end
@@ -147,6 +148,56 @@ local function _toast_transfer(cid, amount)
     else
         System.LogAlways(("[SmithsReach][Toast] %s %+d"):format(tostring(cid), amount))
     end
+end
+
+local function _is_visible(name)
+    if not (UIAction and UIAction.IsVisible) then return nil end
+    local ok, res = pcall(function() return UIAction:IsVisible(name) end)
+    if ok and type(res) == "boolean" then return res end
+    ok, res = pcall(function() return UIAction:IsVisible(name, 0, nil) end)
+    if ok and type(res) == "boolean" then return res end
+    return nil
+end
+
+local function _any_visible(names)
+    local any, known = false, false
+    for _, n in ipairs(names or {}) do
+        local v = _is_visible(n)
+        if v ~= nil then known = true end
+        if v == true then return true, true end
+    end
+    return false, known
+end
+
+-- raw snapshot of all classes
+local function _snapshot_raw_map(entity, label)
+    local with = SmithsReach.Stash and SmithsReach.Stash.SnapshotWithLog
+    if type(with) == "function" then return with(entity, label) end
+    local raw = {}
+    local ok, map = pcall(function()
+        local t, _ = SmithsReach.Stash.Snapshot(entity); return t
+    end)
+    if ok and map then raw = map end
+    return raw
+end
+
+local function _filter_non_mats(raw)
+    local out = {}
+    for cid, n in pairs(raw or {}) do
+        if n > 0 and not (SmithsReach.CraftingMats and SmithsReach.CraftingMats[cid]) then
+            out[cid] = n
+        end
+    end
+    return out
+end
+
+local function _positive_deltas(curr, base)
+    local d = {}
+    for cid, n in pairs(curr or {}) do
+        local b = (base and base[cid]) or 0
+        if n > b then d[cid] = n - b end
+    end
+    return d
 end
 
 function SmithsReach.Init()
@@ -708,6 +759,8 @@ function SmithsReach._ForgeOnOpen(stationEnt, user, slot)
     -- Start watchers AFTER session is set
     if SmithsReach._StartProximityClose then SmithsReach._StartProximityClose() end
     if SmithsReach._StartCraftDetect then SmithsReach._StartCraftDetect() end
+
+    SmithsReach._StartHeartbeat()
 end
 
 function SmithsReach._ForgeOnClose()
@@ -1036,4 +1089,91 @@ function SmithsReach._StartCraftDetect()
     end
 
     Script.SetTimer(tickMs, tick)
+end
+
+function SmithsReach._StartHeartbeat()
+    local hbCfg = SmithsReach.Config.Heartbeat
+    local names = SmithsReach.Config.UI.CraftingElements
+
+    -- session-local state
+    local S = SmithsReach._Session
+    S.phase = "AwaitUI"
+    S.phaseTicks = 0
+    S.seenOpen = false
+    S.hideBeats = 0
+    S.resultBeats = 0
+    -- baseline for non-mats
+    S.NonMats_before = _filter_non_mats(_snapshot_raw_map(player, nil))
+    S.Crafted = {}
+    S.craftedSeen = false
+
+    local function beat()
+        if not (SmithsReach._Session and SmithsReach._Session.active) then return end
+        local vis, known = _any_visible(names)
+        local intervalMs = hbCfg.intervalMs
+        local function nextBeat() Script.SetTimer(intervalMs, beat) end
+        local function tryClose(reason)
+            System.LogAlways("[SmithsReach] END via " .. reason)
+            local ok, err = xpcall(SmithsReach._ForgeOnClose, debug.traceback)
+            if not ok then System.LogAlways("[SmithsReach] _ForgeOnClose ERROR:\n" .. tostring(err)) end
+        end
+
+        S.phaseTicks = S.phaseTicks + 1
+
+        if S.phase == "AwaitUI" then
+            if vis == true then
+                S.seenOpen = true
+                S.phase = "Active"; S.phaseTicks = 0
+            else
+                -- UI never appeared quickly -> grace-cancel
+                if known and (S.phaseTicks * intervalMs >= hbCfg.openGraceMs) then
+                    tryClose("UI timeout (never became visible)")
+                    return
+                end
+            end
+            nextBeat(); return
+        end
+
+        if S.phase == "Active" then
+            -- detect crafted outputs while UI visible
+            if vis == true then
+                local nonNow = _filter_non_mats(_snapshot_raw_map(player, nil))
+                local deltas = _positive_deltas(nonNow, S.NonMats_before)
+                local saw    = false
+                for cid, n in pairs(deltas) do
+                    if n > 0 then
+                        S.Crafted[cid] = (S.Crafted[cid] or 0) + n
+                        saw = true
+                    end
+                end
+                if saw then S.craftedSeen = true end
+            end
+
+            if vis == false and S.seenOpen then
+                S.hideBeats = S.hideBeats + 1
+                if S.hideBeats >= hbCfg.hideDebounceBeats then
+                    S.phase = "AwaitResult"; S.phaseTicks = 0
+                end
+            else
+                S.hideBeats = 0
+            end
+            nextBeat(); return
+        end
+
+        if S.phase == "AwaitResult" then
+            -- one last small stabilization window for result popup / inventory settle
+            S.resultBeats = S.resultBeats + 1
+            if S.resultBeats >= hbCfg.resultDebounceBeats then
+                tryClose(S.craftedSeen and "UI hidden (crafted)" or "UI hidden (no craft)")
+                return
+            end
+            nextBeat(); return
+        end
+
+        -- default
+        nextBeat()
+    end
+
+    -- small mount delay
+    Script.SetTimer(150, beat)
 end

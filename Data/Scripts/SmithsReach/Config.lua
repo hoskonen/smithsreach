@@ -24,5 +24,16 @@ SmithsReach.Config = {
         onOpen   = false, -- clone toasts (off by default to avoid spam)
         onClose  = true,  -- cleanup toasts
         maxItems = 8,     -- cap per event
+    },
+    Heartbeat = {
+        intervalMs = 250,
+        openGraceMs = 2500,      -- give the panel time to appear if user backed out fast
+        hideDebounceBeats = 2,   -- require # consecutive “not visible” polls
+        resultDebounceBeats = 2, -- beat(s) after result to stabilize counts
+    },
+    UI = {
+        CraftingElements = {
+            "ApseCraftingContent", "ApseCraftingList", "ApseModalDialog"
+        }
     }
 }
