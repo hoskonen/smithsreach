@@ -5,10 +5,8 @@ SmithsReach._Session = SmithsReach._Session or { active = false }
 -- ----- Defaults (authoritative, safe) -----
 local DEFAULTS = {
     Behavior = {
-        cloneOnOpen     = true,
-        returnLeftovers = false,
-        showTransferFX  = true,
-        verboseLogs     = true,
+        showTransferFX = true,
+        verboseLogs    = true,
     },
     PullCaps = {
         max_kinds = 12,
@@ -88,6 +86,107 @@ local function _k(m)
     for _ in pairs(m or {}) do c = c + 1 end
     return c
 end
+
+-- Remove up to `need` units of classId from an inventory owner (entity or inventory)
+local function _remove_class_units(invOwner, classId, need)
+    need = tonumber(need) or 0
+    if need <= 0 then return 0 end
+
+    local inv = invOwner and (invOwner.inventory or invOwner)
+    if not inv then return 0 end
+
+    local removed, classText = 0, tostring(classId)
+
+    -- 1) Fast path: bulk if supported
+    if type(inv.RemoveClassCount) == "function" then
+        local ok, n = pcall(function() return inv:RemoveClassCount(classId, need) end)
+        if ok and type(n) == "number" then return n end
+    end
+
+    -- 2) Preferred: DeleteItemOfClass (loop per unit to be safe across builds)
+    if type(inv.DeleteItemOfClass) == "function" then
+        for i = 1, need do
+            local ok = pcall(function() inv:DeleteItemOfClass(classText, 1) end)
+            if not ok then break end
+            removed = removed + 1
+            if removed >= need then return removed end
+        end
+    end
+
+    -- 3) Per-unit: FindItem + DeleteItem
+    if type(inv.FindItem) == "function" and type(inv.DeleteItem) == "function" then
+        for i = removed + 1, need do
+            local okF, wuid = pcall(function() return inv:FindItem(classId) end)
+            if not okF or not wuid then break end
+            local okD = pcall(function() inv:DeleteItem(wuid) end)
+            if not okD then break end
+            removed = removed + 1
+            if removed >= need then return removed end
+        end
+    end
+
+    -- 4) Per-unit: FindItem + RemoveItem
+    if type(inv.FindItem) == "function" and type(inv.RemoveItem) == "function" then
+        for i = removed + 1, need do
+            local okF, wuid = pcall(function() return inv:FindItem(classId) end)
+            if not okF or not wuid then break end
+            local okR = pcall(function() inv:RemoveItem(wuid) end)
+            if not okR then break end
+            removed = removed + 1
+            if removed >= need then return removed end
+        end
+    end
+
+    -- 5) Fallback: scan snapshot table
+    if type(inv.GetInventoryTable) == "function" and type(inv.DeleteItem) == "function" then
+        local okT, tbl = pcall(function() return inv:GetInventoryTable() end)
+        if okT and tbl then
+            for _, wuid in pairs(tbl) do
+                if removed >= need then break end
+                local itm = (ItemManager and ItemManager.GetItem) and ItemManager.GetItem(wuid) or nil
+                local cid = itm and (itm.classId or itm.class or itm.type or itm.kind)
+                if cid == classId then
+                    local okD = pcall(function() inv:DeleteItem(wuid) end)
+                    if okD then removed = removed + 1 end
+                end
+            end
+        end
+    end
+    if removed < need and type(inv.GetInventoryTable) == "function" and type(inv.RemoveItem) == "function" then
+        local okT, tbl = pcall(function() return inv:GetInventoryTable() end)
+        if okT and tbl then
+            for _, wuid in pairs(tbl) do
+                if removed >= need then break end
+                local itm = (ItemManager and ItemManager.GetItem) and ItemManager.GetItem(wuid) or nil
+                local cid = itm and (itm.classId or itm.class or itm.type or itm.kind)
+                if cid == classId then
+                    local okR = pcall(function() inv:RemoveItem(wuid) end)
+                    if okR then removed = removed + 1 end
+                end
+            end
+        end
+    end
+
+    return removed
+end
+
+-- Count all inventory items that are NOT in the CraftingMats whitelist
+local function _snapshot_nonmats(ent)
+    local inv = ent and ent.inventory
+    if not (inv and inv.GetInventoryTable) then return {} end
+    local ok, tbl = pcall(function() return inv:GetInventoryTable() end)
+    if not ok or not tbl then return {} end
+    local out = {}
+    for _, wuid in pairs(tbl) do
+        local itm = ItemManager and ItemManager.GetItem and ItemManager.GetItem(wuid) or nil
+        local cid = itm and (itm.classId or itm.class or itm.type)
+        if cid and (not SmithsReach.CraftingMats or not SmithsReach.CraftingMats[cid]) then
+            out[cid] = (out[cid] or 0) + 1
+        end
+    end
+    return out
+end
+
 
 function SmithsReach.Init()
     -- Stash-side commands
@@ -575,49 +674,64 @@ end
 function SmithsReach._ForgeOnOpen(stationEnt, user, slot)
     System.LogAlways("[SmithsReach] _ForgeOnOpen: enter")
 
-    -- soft-restart if left active
+    -- Soft-restart if a session was left active
     if SmithsReach._Session and SmithsReach._Session.active then
         pcall(SmithsReach._ForgeOnClose)
     end
 
-    -- Your existing stash retrieval stays as-is
+    -- Resolve stash/player
     local stashEnt = SmithsReach.Stash.GetStash()
     if not (stashEnt and stashEnt.inventory and player and player.inventory) then
         System.LogAlways("[SmithsReach] _ForgeOnOpen: missing stash/player"); return
     end
 
+    -- BEFORE snapshots
     local P_before = _matSnapshot(player, "Player")
     local S_before = _matSnapshot(stashEnt, "Stash")
 
-    local cloned, clonedTotal = {}, 0
-    if SmithsReach.Config.Behavior.cloneOnOpen then
-        local caps = SmithsReach.Config.PullCaps
-        local kinds, total = 0, 0
-        for cid, cnt in pairs(S_before) do
-            local n = math.min(cnt, caps.max_each)
-            if n > 0 then
-                pcall(function() player.inventory:CreateItem(cid, n, 1) end)
-                cloned[cid] = n; clonedTotal = clonedTotal + n
-                kinds = kinds + 1; total = total + n
-                if kinds >= caps.max_kinds or total >= caps.max_total then break end
-            end
+    -- Clone bounded mats from stash -> player (stash unchanged)
+    local cloned, clonedTotal, kinds, total = {}, 0, 0, 0
+    local caps = SmithsReach.Config.PullCaps
+    for cid, cnt in pairs(S_before) do
+        if kinds >= caps.max_kinds or total >= caps.max_total then break end
+        local give = math.min(cnt, caps.max_each, caps.max_total - clonedTotal)
+        if give > 0 then
+            pcall(function() player.inventory:CreateItem(cid, give, 1) end)
+            cloned[cid] = give
+            clonedTotal = clonedTotal + give
+            kinds = kinds + 1
+            total = total + give
         end
     end
 
-    SmithsReach._Session = {
+    -- New session UID
+    SmithsReach._SessionSerial = (SmithsReach._SessionSerial or 0) + 1
+    local uid = SmithsReach._SessionSerial
+
+    -- Build the session FIRST...
+    local sess = {
+        uid        = uid,
         active     = true,
-        station_id = stationEnt and stationEnt.id, -- << use this for proximity
-        stash_id   = stashEnt.id,                  -- unchanged: your master stash
-        player_id  = player and player.id,
+        station_id = stationEnt and stationEnt.id or nil, -- used by proximity watcher
+        stash_id   = stashEnt.id,
+        player_id  = player and player.id or nil,
         P_before   = P_before,
         S_before   = S_before,
         cloned     = cloned,
     }
 
+    -- ...then record the NON-material baseline AFTER cloning
+    sess.NM_before = _snapshot_nonmats(player)
+
+    -- Publish the session
+    SmithsReach._Session = sess
+
     System.LogAlways(("[SmithsReach] OPEN: player %d/%d  stash %d/%d  cloned %d kinds / %d items")
         :format(_k(P_before), _sum(P_before), _k(S_before), _sum(S_before), _k(cloned), clonedTotal))
 
-    SmithsReach._StartProximityClose()
+    -- Start watchers AFTER session is set
+    if SmithsReach._StartProximityClose then SmithsReach._StartProximityClose() end
+    if SmithsReach._StartCraftDetect then SmithsReach._StartCraftDetect() end
 end
 
 function SmithsReach._ForgeOnClose()
@@ -631,40 +745,45 @@ function SmithsReach._ForgeOnClose()
         System.LogAlways("[SmithsReach] CLOSE: missing stash/player"); sess.active = false; return
     end
 
-    local P_after, pk2, pt2 = _matSnapshot(player)
-    local S_after, sk2, st2 = _matSnapshot(stashEnt)
+    -- AFTER snapshot
+    local P_after            = _matSnapshot(player, "INV")
 
-    -- compute used per class, bounded by what we cloned
-    local used, leftover = {}, {}
-    for cid, clonedN in pairs(sess.cloned or {}) do
-        local beforeN = sess.P_before[cid] or 0
-        local afterN  = P_after[cid] or 0
-        local want    = math.max(0, (beforeN + clonedN) - afterN)
-        local u       = math.min(want, clonedN)
-        used[cid]     = u
-        leftover[cid] = clonedN - u
-    end
+    local P0                 = sess.P_before or {}
+    local C                  = sess.cloned or {}
+    local wantUsed, wantLeft = 0, 0
+    local remUsed, remLeft   = 0, 0
 
-    local usedSum, leftSum = _sum(used), _sum(leftover)
+    for cid, c in pairs(C) do
+        local p0 = P0[cid] or 0
+        local p1 = P_after[cid] or 0
+        local delta = p1 - p0 -- extra mats still on player
+        if delta < 0 then delta = 0 end
+        if delta > c then delta = c end
 
-    System.LogAlways(("[SmithsReach] CLOSE: Δplayer kinds=%+d items=%+d | used=%d leftover=%d")
-        :format(_k(P_after) - _k(sess.P_before), _sum(P_after) - _sum(sess.P_before), usedSum, leftSum))
+        local leftover = delta     -- should be removed from player
+        local used     = c - delta -- should be debited from stash
 
-    -- print a few used rows for visibility
-    local shown = 0
-    for cid, n in pairs(used) do
-        if n > 0 then
-            local nm = tostring(cid)
-            if ItemManager and ItemManager.GetItemUIName then
-                local okNm, uiNm = pcall(function() return ItemManager.GetItemUIName(cid) end)
-                if okNm and uiNm then nm = uiNm end
+        if used > 0 then
+            wantUsed = wantUsed + used
+            remUsed  = remUsed + _remove_class_units(stashEnt, cid, used)
+            if remUsed < wantUsed then
+                System.LogAlways(("[SmithsReach] WARN: stash shortfall class=%s want=%d removed=%d")
+                    :format(tostring(cid), used, remUsed))
             end
-            System.LogAlways(("  used  %s x%d"):format(nm, n))
-            shown = shown + 1; if shown >= 20 then break end
+        end
+        if leftover > 0 then
+            wantLeft = wantLeft + leftover
+            remLeft  = remLeft + _remove_class_units(player, cid, leftover)
+            if remLeft < wantLeft then
+                System.LogAlways(("[SmithsReach] WARN: player leftover shortfall class=%s want=%d removed=%d")
+                    :format(tostring(cid), leftover, remLeft))
+            end
         end
     end
 
-    -- (No mutation yet: we’re not removing from stash or cleaning leftovers here.)
+    System.LogAlways(("[SmithsReach] CLOSE: want_used=%d want_leftover=%d | removed_used=%d removed_leftover=%d")
+        :format(wantUsed, wantLeft, remUsed, remLeft))
+
     sess.active = false
 end
 
@@ -796,12 +915,12 @@ function SmithsReach_ScanUnmatched()
     if not (s and s.inventory) then
         System.LogAlways("[SmithsReach] scan_unmatched: no stash"); return
     end
-    --local raw = SmithsReach.Stash.SnapshotWithLog(s, "Stash")
+    local raw = SmithsReach.Stash.Snapshot(s)
     local shown = 0
     for cid, cnt in pairs(raw) do
-        if not SmithsReach.CraftingMats[cid] and cnt > 0 then
-            local ui = nil; if ItemManager and ItemManager.GetItemUIName then ui = ItemManager.GetItemUIName(cid) end
-            local db = nil; if ItemManager and ItemManager.GetItemName then db = ItemManager.GetItemName(cid) end
+        if cnt > 0 and (not SmithsReach.CraftingMats or not SmithsReach.CraftingMats[cid]) then
+            local ui = ItemManager and ItemManager.GetItemUIName and ItemManager.GetItemUIName(cid) or nil
+            local db = ItemManager and ItemManager.GetItemName and ItemManager.GetItemName(cid) or nil
             System.LogAlways(("[SmithsReach] UNMATCHED %s (%s) x%d  class=%s")
                 :format(tostring(ui or "?"), tostring(db or "?"), cnt, cid))
             shown = shown + 1; if shown >= 40 then
@@ -809,10 +928,10 @@ function SmithsReach_ScanUnmatched()
             end
         end
     end
+    if shown == 0 then System.LogAlways("[SmithsReach] scan_unmatched: all stash kinds are whitelisted") end
 end
 
--- Proximity-only close watcher
-
+-- Proximity-only close watcher / Terrible way to detect when blacksmithing is closed
 local function _dist2(a, b)
     local dx, dy, dz = a.x - b.x, a.y - b.y, a.z - b.z
     return dx * dx + dy * dy + dz * dz
@@ -855,6 +974,65 @@ function SmithsReach._StartProximityClose()
         else
             s._awayTicks = 0
         end
+        Script.SetTimer(tickMs, tick)
+    end
+
+    Script.SetTimer(tickMs, tick)
+end
+
+-- Close when a new NON-material item appears in player inventory
+function SmithsReach._StartCraftDetect()
+    local s = SmithsReach._Session
+    if not (s and s.active and s.player_id and s.NM_before) then return end
+    if s._craftDetectRunning then return end
+    s._craftDetectRunning = true
+    s._craftConfirm = 0
+
+    local tickMs = (SmithsReach.Config.Close and SmithsReach.Config.Close.tickMs) or 200
+    local uid = s.uid or 0
+
+    local function tick()
+        if not SmithsReach._Session or SmithsReach._Session ~= s or (s.uid and SmithsReach._Session.uid ~= uid) then
+            return
+        end
+        if not s.active then
+            s._craftDetectRunning = false; return
+        end
+
+        local pl = System.GetEntity(s.player_id)
+        if not pl then
+            s._craftDetectRunning = false; return
+        end
+
+        local nowNM = _snapshot_nonmats(pl)
+        local increased = false
+
+        -- any non-mat cid whose count grew vs baseline?
+        for cid, nowCnt in pairs(nowNM) do
+            local base = s.NM_before[cid] or 0
+            if nowCnt > base then
+                increased = true; break
+            end
+        end
+        -- also treat entirely new non-mat cid as increase
+        if not increased then
+            for cid, _ in pairs(s.NM_before) do
+                -- no-op; above loop already handles growth; new cids are covered by the first loop too
+            end
+        end
+
+        if increased then
+            s._craftConfirm = s._craftConfirm + 1
+            if s._craftConfirm >= 2 then -- small debounce
+                System.LogAlways("[SmithsReach] END via crafted output detected")
+                SmithsReach._ForgeOnClose()
+                s._craftDetectRunning = false
+                return
+            end
+        else
+            s._craftConfirm = 0
+        end
+
         Script.SetTimer(tickMs, tick)
     end
 

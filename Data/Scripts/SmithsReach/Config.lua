@@ -4,16 +4,14 @@ SmithsReach = SmithsReach or {}
 SmithsReach.Config = {
     -- QoL behavior
     Behavior = {
-        cloneOnOpen     = true,  -- if false, we only snapshot/log
-        returnLeftovers = false, -- remove cloned-but-unused from player on close
-        showTransferFX  = true,  -- Game.ShowItemsTransfer(...) when cloning
-        verboseLogs     = true,
-        fxAtClose       = true,  -- if true, use the queue; if false, show inline (maybe with delay)
-        fxOpenDelayMs   = 250,
+        showTransferFX = true, -- Game.ShowItemsTransfer(...) when cloning
+        verboseLogs    = true,
+        fxAtClose      = true, -- if true, use the queue; if false, show inline (maybe with delay)
+        fxOpenDelayMs  = 250,
     },
     Close = {
         distM      = 2.0, -- meters before we consider you “away”
-        graceTicks = 2,  -- consecutive ticks away before closing
+        graceTicks = 2,   -- consecutive ticks away before closing
         tickMs     = 200, -- polling rate
     },
 
