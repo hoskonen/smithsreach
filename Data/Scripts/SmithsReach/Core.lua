@@ -47,29 +47,21 @@ local function _filterMats(raw)
 end
 
 -- Materials helpers (read-only) ---
+-- keep this version only
 local function _matSnapshot(entity, label)
-    -- pick whichever snapshot function exists
     local snapWith = SmithsReach.Stash and SmithsReach.Stash.SnapshotWithLog
     local snapRaw  = SmithsReach.Stash and SmithsReach.Stash.Snapshot
 
     if type(snapWith) == "function" then
-        -- WithLog takes (entity, label)
-        local ok, raw = xpcall(function()
-            return snapWith(entity, label)
-        end, debug.traceback)
+        local ok, raw = xpcall(function() return snapWith(entity, label) end, debug.traceback)
         if not ok then
-            System.LogAlways("[SmithsReach] _matSnapshot ERROR (" .. tostring(label) .. "):\n" .. tostring(raw))
-            return {}
+            System.LogAlways("[SmithsReach] _matSnapshot ERROR (" .. tostring(label) .. "):\n" .. tostring(raw)); return {}
         end
         return _filterMats(raw)
     elseif type(snapRaw) == "function" then
-        -- plain Snapshot takes (entity) only
-        local ok, raw, meta = xpcall(function()
-            return snapRaw(entity)
-        end, debug.traceback)
+        local ok, raw, meta = xpcall(function() return snapRaw(entity) end, debug.traceback)
         if not ok then
-            System.LogAlways("[SmithsReach] _matSnapshot ERROR (" .. tostring(label) .. "):\n" .. tostring(raw))
-            return {}
+            System.LogAlways("[SmithsReach] _matSnapshot ERROR (" .. tostring(label) .. "):\n" .. tostring(raw)); return {}
         end
         local function k(t)
             local c = 0
@@ -77,8 +69,8 @@ local function _matSnapshot(entity, label)
             return c
         end
         System.LogAlways(("[SmithsReach][%s] Snapshot: entries=%s resolved=%s kinds=%d")
-            :format(label or "INV", tostring(meta and meta.entries or "?"),
-                tostring(meta and meta.resolved or "?"), k(raw)))
+            :format(label or "INV", tostring(meta and meta.entries or "?"), tostring(meta and meta.resolved or "?"),
+                k(raw)))
         return _filterMats(raw)
     else
         System.LogAlways("[SmithsReach] _matSnapshot: no Snapshot function available")
@@ -594,9 +586,7 @@ function SmithsReach._ForgeOnOpen()
     end
 
     local P_before = _matSnapshot(player, "Player")
-    System.LogAlways("[SmithsReach] _ForgeOnOpen: after player snapshot")
     local S_before = _matSnapshot(stashEnt, "Stash")
-    System.LogAlways("[SmithsReach] _ForgeOnOpen: after stash snapshot")
 
     local cloned, clonedTotal = {}, 0
     if SmithsReach.Config.Behavior.cloneOnOpen then
