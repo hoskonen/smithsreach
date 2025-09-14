@@ -123,7 +123,6 @@ local function _delete_class_units(invOwner, classId, need)
     return 0
 end
 
-
 -- Count all inventory items that are NOT in the CraftingMats whitelist
 local function _snapshot_nonmats(ent)
     local inv = ent and ent.inventory
@@ -141,6 +140,14 @@ local function _snapshot_nonmats(ent)
     return out
 end
 
+local function _toast_transfer(cid, amount)
+    if not amount or amount == 0 then return end
+    if Game and type(Game.ShowItemsTransfer) == "function" then
+        pcall(function() Game.ShowItemsTransfer(tostring(cid), amount) end)
+    else
+        System.LogAlways(("[SmithsReach][Toast] %s %+d"):format(tostring(cid), amount))
+    end
+end
 
 function SmithsReach.Init()
     -- Stash-side commands
@@ -683,6 +690,21 @@ function SmithsReach._ForgeOnOpen(stationEnt, user, slot)
     System.LogAlways(("[SmithsReach] OPEN: player %d/%d  stash %d/%d  cloned %d kinds / %d items")
         :format(_k(P_before), _sum(P_before), _k(S_before), _sum(S_before), _k(cloned), clonedTotal))
 
+    -- show item transfer
+    do
+        local N = SmithsReach.Config.Notif or {}
+        if N.onOpen then
+            local shown = 0
+            for cid, n in pairs(cloned) do
+                if n > 0 then
+                    _toast_transfer(cid, n) -- +N into player
+                    shown = shown + 1
+                    if shown >= (N.maxItems or 8) then break end
+                end
+            end
+        end
+    end
+
     -- Start watchers AFTER session is set
     if SmithsReach._StartProximityClose then SmithsReach._StartProximityClose() end
     if SmithsReach._StartCraftDetect then SmithsReach._StartCraftDetect() end
@@ -704,8 +726,10 @@ function SmithsReach._ForgeOnClose()
 
     local P0                 = sess.P_before or {}
     local C                  = sess.cloned or {}
+
+    -- build per-class maps first (no mutations yet)
+    local usedMap, leftMap   = {}, {}
     local wantUsed, wantLeft = 0, 0
-    local remUsed, remLeft   = 0, 0
 
     for cid, c in pairs(C) do
         local p0 = P0[cid] or 0
@@ -714,23 +738,44 @@ function SmithsReach._ForgeOnClose()
         if delta < 0 then delta = 0 end
         if delta > c then delta = c end
 
-        local leftover = delta     -- should be removed from player
-        local used     = c - delta -- should be debited from stash
+        local leftN = delta     -- leftover clones to remove from player
+        local usedN = c - delta -- mats to debit from stash
 
-        if used > 0 then
-            wantUsed = wantUsed + used
-            remUsed  = remUsed + _delete_class_units(stashEnt, cid, used)
-            if remUsed < wantUsed then
-                System.LogAlways(("[SmithsReach] WARN: stash shortfall class=%s want=%d removed=%d")
-                    :format(tostring(cid), used, remUsed))
-            end
+        if usedN > 0 then
+            usedMap[cid] = usedN; wantUsed = wantUsed + usedN
         end
-        if leftover > 0 then
-            wantLeft = wantLeft + leftover
-            remLeft  = remLeft + _delete_class_units(player, cid, leftover)
-            if remLeft < wantLeft then
+        if leftN > 0 then
+            leftMap[cid] = leftN; wantLeft = wantLeft + leftN
+        end
+    end
+
+    -- 1) Stash -= used
+    local remUsed = 0
+    for cid, u in pairs(usedMap) do
+        local n = _delete_class_units(stashEnt, cid, u) or 0
+        remUsed = remUsed + n
+        if n < u then
+            System.LogAlways(("[SmithsReach] WARN: stash shortfall class=%s want=%d removed=%d")
+                :format(tostring(cid), u, n))
+        end
+    end
+
+    -- 2) Player -= leftover clones (and toast once per cid)
+    local remLeft = 0
+    do
+        local N = SmithsReach.Config.Notif or {}
+        local maxLines = N.maxItems or 8
+        local shown = 0
+        for cid, l in pairs(leftMap) do
+            local n = _delete_class_units(player, cid, l) or 0
+            remLeft = remLeft + n
+            if n < l then
                 System.LogAlways(("[SmithsReach] WARN: player leftover shortfall class=%s want=%d removed=%d")
-                    :format(tostring(cid), leftover, remLeft))
+                    :format(tostring(cid), l, n))
+            end
+            if N.onClose and n > 0 and shown < maxLines then
+                _toast_transfer(cid, -n) -- built-in Game.ShowItemsTransfer
+                shown = shown + 1
             end
         end
     end
