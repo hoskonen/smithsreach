@@ -87,88 +87,42 @@ local function _k(m)
     return c
 end
 
--- Remove up to `need` units of classId from an inventory owner (entity or inventory)
-local function _remove_class_units(invOwner, classId, need)
+-- Minimal, robust delete-by-class for any inventory owner (entity or inventory)
+local function _delete_class_units(invOwner, classId, need)
     need = tonumber(need) or 0
     if need <= 0 then return 0 end
 
     local inv = invOwner and (invOwner.inventory or invOwner)
     if not inv then return 0 end
 
-    local removed, classText = 0, tostring(classId)
+    local removed = 0
+    local classText = tostring(classId)
 
-    -- 1) Fast path: bulk if supported
-    if type(inv.RemoveClassCount) == "function" then
-        local ok, n = pcall(function() return inv:RemoveClassCount(classId, need) end)
-        if ok and type(n) == "number" then return n end
-    end
-
-    -- 2) Preferred: DeleteItemOfClass (loop per unit to be safe across builds)
+    -- 1) Preferred: engine bulk-by-class (loop per unit = precise & portable)
     if type(inv.DeleteItemOfClass) == "function" then
         for i = 1, need do
             local ok = pcall(function() inv:DeleteItemOfClass(classText, 1) end)
             if not ok then break end
             removed = removed + 1
-            if removed >= need then return removed end
         end
+        return removed
     end
 
-    -- 3) Per-unit: FindItem + DeleteItem
+    -- 2) Fallback: per-item delete
     if type(inv.FindItem) == "function" and type(inv.DeleteItem) == "function" then
-        for i = removed + 1, need do
+        for i = 1, need do
             local okF, wuid = pcall(function() return inv:FindItem(classId) end)
             if not okF or not wuid then break end
             local okD = pcall(function() inv:DeleteItem(wuid) end)
             if not okD then break end
             removed = removed + 1
-            if removed >= need then return removed end
         end
+        return removed
     end
 
-    -- 4) Per-unit: FindItem + RemoveItem
-    if type(inv.FindItem) == "function" and type(inv.RemoveItem) == "function" then
-        for i = removed + 1, need do
-            local okF, wuid = pcall(function() return inv:FindItem(classId) end)
-            if not okF or not wuid then break end
-            local okR = pcall(function() inv:RemoveItem(wuid) end)
-            if not okR then break end
-            removed = removed + 1
-            if removed >= need then return removed end
-        end
-    end
-
-    -- 5) Fallback: scan snapshot table
-    if type(inv.GetInventoryTable) == "function" and type(inv.DeleteItem) == "function" then
-        local okT, tbl = pcall(function() return inv:GetInventoryTable() end)
-        if okT and tbl then
-            for _, wuid in pairs(tbl) do
-                if removed >= need then break end
-                local itm = (ItemManager and ItemManager.GetItem) and ItemManager.GetItem(wuid) or nil
-                local cid = itm and (itm.classId or itm.class or itm.type or itm.kind)
-                if cid == classId then
-                    local okD = pcall(function() inv:DeleteItem(wuid) end)
-                    if okD then removed = removed + 1 end
-                end
-            end
-        end
-    end
-    if removed < need and type(inv.GetInventoryTable) == "function" and type(inv.RemoveItem) == "function" then
-        local okT, tbl = pcall(function() return inv:GetInventoryTable() end)
-        if okT and tbl then
-            for _, wuid in pairs(tbl) do
-                if removed >= need then break end
-                local itm = (ItemManager and ItemManager.GetItem) and ItemManager.GetItem(wuid) or nil
-                local cid = itm and (itm.classId or itm.class or itm.type or itm.kind)
-                if cid == classId then
-                    local okR = pcall(function() inv:RemoveItem(wuid) end)
-                    if okR then removed = removed + 1 end
-                end
-            end
-        end
-    end
-
-    return removed
+    return 0
 end
+
 
 -- Count all inventory items that are NOT in the CraftingMats whitelist
 local function _snapshot_nonmats(ent)
@@ -765,7 +719,7 @@ function SmithsReach._ForgeOnClose()
 
         if used > 0 then
             wantUsed = wantUsed + used
-            remUsed  = remUsed + _remove_class_units(stashEnt, cid, used)
+            remUsed  = remUsed + _delete_class_units(stashEnt, cid, used)
             if remUsed < wantUsed then
                 System.LogAlways(("[SmithsReach] WARN: stash shortfall class=%s want=%d removed=%d")
                     :format(tostring(cid), used, remUsed))
@@ -773,7 +727,7 @@ function SmithsReach._ForgeOnClose()
         end
         if leftover > 0 then
             wantLeft = wantLeft + leftover
-            remLeft  = remLeft + _remove_class_units(player, cid, leftover)
+            remLeft  = remLeft + _delete_class_units(player, cid, leftover)
             if remLeft < wantLeft then
                 System.LogAlways(("[SmithsReach] WARN: player leftover shortfall class=%s want=%d removed=%d")
                     :format(tostring(cid), leftover, remLeft))
