@@ -2,7 +2,13 @@
 SmithsReach = SmithsReach or {}
 local M = {}
 
-local function dbg(msg) System.LogAlways("[SmithsReach][Stash] " .. msg) end
+local function dbg(msg)
+    local B = SmithsReach and SmithsReach.Config and SmithsReach.Config.Behavior or {}
+    if B.verboseLogs then
+        System.LogAlways(("[SmithsReach][Stash] %s"):format(msg))
+    end
+end
+
 
 function M.GetStash()
     local list = System.GetEntitiesByClass("Stash") or {}

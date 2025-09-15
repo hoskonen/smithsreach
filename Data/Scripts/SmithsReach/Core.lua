@@ -40,8 +40,15 @@ SmithsReach.Debug.DiffStashPl   = SmithsReach.Debug.DiffStashPl or
 SmithsReach.Debug.PullOne       = SmithsReach.Debug.PullOne or
     function() System.LogAlways("[SmithsReach] debug not loaded") end
 
+local function LOG(fmt, ...) System.LogAlways(("[SmithsReach] " .. fmt):format(...)) end
+local function VLOG(fmt, ...)
+    local B = SmithsReach.Config and SmithsReach.Config.Behavior or {}
+    if B.verboseLogs then LOG(fmt, ...) end
+end
+
+
 -- ----- Defaults (authoritative, safe) -----
-local DEFAULTS                  = {
+local DEFAULTS = {
     Behavior = {
         showTransferFX = true,
         verboseLogs    = true,
@@ -423,8 +430,12 @@ function SmithsReach._ForgeOnOpen(stationEnt, user, slot)
     -- Publish the session
     SmithsReach._Session = sess
 
-    System.LogAlways(("[SmithsReach] OPEN: player %d/%d  stash %d/%d  cloned %d kinds / %d items")
-        :format(_k(P_before), _sum(P_before), _k(S_before), _sum(S_before), _k(cloned), clonedTotal))
+    local kinds, clonedTotal = _k(cloned), clonedTotal -- existing locals
+    VLOG("OPEN: player %d/%d  stash %d/%d  cloned %d kinds / %d items",
+        _k(P_before), _sum(P_before), _k(S_before), _sum(S_before), kinds, clonedTotal)
+    if not (SmithsReach.Config.Behavior or {}).verboseLogs then
+        LOG("OPEN: cloned %d kinds / %d items", kinds, clonedTotal)
+    end
 
     -- show item transfer
     do
@@ -518,8 +529,9 @@ function SmithsReach._ForgeOnClose()
         end
     end
 
-    System.LogAlways(("[SmithsReach] CLOSE: want_used=%d want_leftover=%d | removed_used=%d removed_leftover=%d")
-        :format(wantUsed, wantLeft, remUsed, remLeft))
+    VLOG("CLOSE: want_used=%d want_leftover=%d | removed_used=%d removed_leftover=%d",
+        wantUsed, wantLeft, remUsed, remLeft)
+    LOG("CLOSE: used=%d  returned=%d", remUsed, remLeft)
 
     sess.active = false
 end
@@ -725,8 +737,12 @@ function SmithsReach._StartPoller()
             -- Log exactly what we think is crafted
             for _, d in ipairs(effItems) do
                 local ui = (ItemManager and ItemManager.GetItemUIName and ItemManager.GetItemUIName(d.cid)) or "?"
-                System.LogAlways(("[SmithsReach][Crafted] %s (cid=%s) +%d → total=%d")
-                    :format(tostring(ui), tostring(d.cid), d.gain, d.total))
+                VLOG("[Crafted] %s (cid=%s) +%d → total=%d",
+                    (ItemManager and ItemManager.GetItemUIName and ItemManager.GetItemUIName(d.cid)) or "?",
+                    tostring(d.cid), d.gain, d.total)
+            end
+            if not (SmithsReach.Config.Behavior or {}).verboseLogs then
+                LOG("CRAFTED: +%d item(s)", totalGain)
             end
 
             S.craftedSeen   = true
@@ -747,7 +763,7 @@ function SmithsReach._StartPoller()
             S._farTicks = (S._farTicks or 0) + (far_or_usable_again() and 1 or 0)
             local farMs = (S._farTicks or 0) * interval
             if farMs >= (cfg.cancelFarMs or 4000) then
-                System.LogAlways("[SmithsReach] END (cancel: far/usable-again & no craft)")
+                VLOG("END (cancel: far/usable-again & no craft)"); LOG("END (cancel)")
                 xpcall(SmithsReach._ForgeOnClose, debug.traceback)
                 return
             end
@@ -756,7 +772,7 @@ function SmithsReach._StartPoller()
         -- Absolute cancel ceiling (even if still near)
         if armed and not S.craftedSeen then
             if (nowMs() - (S.armedAtMs or 0)) >= (cfg.cancelMaxMs or (12 * 60 * 1000)) then
-                System.LogAlways("[SmithsReach] END (cancel: absolute timeout)")
+                VLOG("END (cancel: absolute timeout)"); LOG("END (timeout)")
                 xpcall(SmithsReach._ForgeOnClose, debug.traceback)
                 return
             end
@@ -771,7 +787,7 @@ function SmithsReach._StartPoller()
             local longIdle   = msSince >= (cfg.completeIdleMs or 4000)
 
             if settled or longIdle then
-                System.LogAlways("[SmithsReach] END (complete: outputs settled)")
+                VLOG("END (complete: outputs settled)"); LOG("END (complete)")
                 xpcall(SmithsReach._ForgeOnClose, debug.traceback); return
             end
         end

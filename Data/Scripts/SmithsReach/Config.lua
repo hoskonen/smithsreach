@@ -5,7 +5,7 @@ SmithsReach.Config = {
     -- QoL behavior
     Behavior = {
         showTransferFX = true, -- Game.ShowItemsTransfer(...) when cloning
-        verboseLogs    = true,
+        verboseLogs    = false,
         fxAtClose      = true, -- if true, use the queue; if false, show inline (maybe with delay)
         fxOpenDelayMs  = 250,
     },
