@@ -182,56 +182,6 @@ local function _toast_transfer(cid, amount)
     end
 end
 
-local function _is_visible(name)
-    if not (UIAction and UIAction.IsVisible) then return nil end
-    local ok, res = pcall(function() return UIAction:IsVisible(name) end)
-    if ok and type(res) == "boolean" then return res end
-    ok, res = pcall(function() return UIAction:IsVisible(name, 0, nil) end)
-    if ok and type(res) == "boolean" then return res end
-    return nil
-end
-
-local function _any_visible(names)
-    local any, known = false, false
-    for _, n in ipairs(names or {}) do
-        local v = _is_visible(n)
-        if v ~= nil then known = true end
-        if v == true then return true, true end
-    end
-    return false, known
-end
-
--- raw snapshot of all classes
-local function _snapshot_raw_map(entity, label)
-    local with = SmithsReach.Stash and SmithsReach.Stash.SnapshotWithLog
-    if type(with) == "function" then return with(entity, label) end
-    local raw = {}
-    local ok, map = pcall(function()
-        local t, _ = SmithsReach.Stash.Snapshot(entity); return t
-    end)
-    if ok and map then raw = map end
-    return raw
-end
-
-local function _filter_non_mats(raw)
-    local out = {}
-    for cid, n in pairs(raw or {}) do
-        if n > 0 and not (SmithsReach.CraftingMats and SmithsReach.CraftingMats[cid]) then
-            out[cid] = n
-        end
-    end
-    return out
-end
-
-local function _positive_deltas(curr, base)
-    local d = {}
-    for cid, n in pairs(curr or {}) do
-        local b = (base and base[cid]) or 0
-        if n > b then d[cid] = n - b end
-    end
-    return d
-end
-
 local function _ignore_delta_cid(cid)
     local ig = SmithsReach.Config.CraftedIgnore or {}
     if (ig.classIds or {})[cid] then return true end
@@ -249,7 +199,6 @@ local function _ignore_delta_cid(cid)
     end
     return false
 end
-
 
 function SmithsReach.Init()
     -- Stash-side commands
@@ -308,10 +257,6 @@ function SmithsReach.Init()
 
     System.AddCCommand("smithsreach_scan_unmatched", "SmithsReach_ScanUnmatched()",
         "List items in stash that are NOT in CraftingMats (up to 40)")
-
-    -- optional: once you know the exact id, a targeted listener
-    System.AddCCommand("smithsreach_craft_listen", "SmithsReach_CraftListen()",
-        "Usage: smithsreach_craft_listen <ElementId>")
 end
 
 function SmithsReach.OnGameplayStarted(actionName, eventName, argTable)
@@ -358,10 +303,6 @@ function SmithsReach_InvSummary() SmithsReach.DebugInvSummary() end
 function SmithsReach_DiffStashPl() SmithsReach.DebugDiffStashPl() end
 
 function SmithsReach_PullOne() SmithsReach.DebugPullOne() end
-
-function SmithsReach_CraftProbe() SmithsReach.DebugCraftProbe() end
-
-function SmithsReach_CraftBind() SmithsReach.DebugCraftBind() end
 
 function SmithsReach_HookSmithery() SmithsReach.HookSmithery() end
 
@@ -557,115 +498,6 @@ function SmithsReach.DebugPullOne()
     else
         System.LogAlways("[SmithsReach] pull_one: player.inventory.CreateItem missing")
     end
-end
-
-function SmithsReach.DebugCraftProbe()
-    if not UIAction then
-        System.LogAlways("[SmithsReach] craft_probe: UIAction not available")
-        return
-    end
-
-    local ids = {
-        "ApseCraftingContent",
-        "ApseCraftingList",
-        "ApseModalDialog",
-        -- a couple of likely fallbacks if the symbol name differs from file name
-        "CraftingContent", "CraftingList", "ModalDialog",
-    }
-
-    local function regElem(id, ev, tag, fn)
-        if UIAction.RegisterElementListener then
-            UIAction.RegisterElementListener(id, ev, tag .. "_" .. id, fn)
-        end
-    end
-
-    local function regFC(id, cb, tag, fn)
-        -- try both common callback registration names, if present in this build
-        if UIAction.RegisterFlashCallback then
-            UIAction.RegisterFlashCallback(id, cb, tag .. "_" .. id .. "_" .. cb, fn)
-        elseif UIAction.RegisterElementFCListener then
-            UIAction.RegisterElementFCListener(id, cb, tag .. "_" .. id .. "_" .. cb, fn)
-        end
-    end
-
-    for _, id in ipairs(ids) do
-        -- element show/hide
-        regElem(id, "OnShow", "[SmithsReach] CRAFT OnShow",
-            function() System.LogAlways("[SmithsReach] CRAFT OnShow: " .. id) end)
-        regElem(id, "OnHide", "[SmithsReach] CRAFT OnHide",
-            function() System.LogAlways("[SmithsReach] CRAFT OnHide: " .. id) end)
-
-        -- a couple of focus-y events sometimes used
-        regElem(id, "OnFocus", "[SmithsReach] CRAFT OnFocus",
-            function() System.LogAlways("[SmithsReach] CRAFT OnFocus: " .. id) end)
-        regElem(id, "OnFocusLost", "[SmithsReach] CRAFT OnFocusLost",
-            function() System.LogAlways("[SmithsReach] CRAFT OnFocusLost: " .. id) end)
-
-        -- Flash callbacks (case/variant coverage)
-        for _, cb in ipairs({ "FC_Open", "FC_Close", "fc_open", "fc_close", "Open", "Close" }) do
-            regFC(id, cb, "[SmithsReach] CRAFT FC", function(...)
-                System.LogAlways("[SmithsReach] CRAFT FC " .. cb .. ": " .. id)
-            end)
-        end
-    end
-
-    System.LogAlways("[SmithsReach] craft_probe: listeners registered on " .. #ids .. " ids")
-end
-
-function SmithsReach_CraftListen()
-    local args = System.GetCVarArg and System.GetCVarArg() or {}
-    local id = args[1]
-    if not id then
-        System.LogAlways("[SmithsReach] usage: smithsreach_craft_listen <ElementId>")
-        return
-    end
-    if not (UIAction and UIAction.RegisterElementListener) then
-        System.LogAlways("[SmithsReach] craft_listen: UIAction missing")
-        return
-    end
-    UIAction.RegisterElementListener(id, "OnShow", "SmithsReach_Forge_OnShow",
-        function() System.LogAlways("[SmithsReach] Forge UI OnShow (" .. id .. ")") end)
-    UIAction.RegisterElementListener(id, "OnHide", "SmithsReach_Forge_OnHide",
-        function() System.LogAlways("[SmithsReach] Forge UI OnHide (" .. id .. ")") end)
-    System.LogAlways("[SmithsReach] Forge listeners registered for '" .. id .. "'")
-end
-
-function SmithsReach.DebugCraftBind()
-    if not UIAction then
-        System.LogAlways("[SmithsReach] craft_bind: UIAction not available")
-        return
-    end
-
-    local id = "ApseCraftingContent"
-
-    local function regFC(cb, tag, fn)
-        -- Try both common registration APIs (build-dependent)
-        if UIAction.RegisterFlashCallback then
-            UIAction.RegisterFlashCallback(id, cb, tag .. "_" .. cb, fn)
-            return true
-        elseif UIAction.RegisterElementFCListener then
-            UIAction.RegisterElementFCListener(id, cb, tag .. "_" .. cb, fn)
-            return true
-        end
-        return false
-    end
-
-    local ok1 = regFC("fc_activateCrafting", "[SmithsReach] CRAFT",
-        function(anim) System.LogAlways("[SmithsReach] fc_activateCrafting anim=" .. tostring(anim)) end)
-    local ok2 = regFC("fc_deactivateCrafting", "[SmithsReach] CRAFT",
-        function(anim) System.LogAlways("[SmithsReach] fc_deactivateCrafting anim=" .. tostring(anim)) end)
-
-    -- Fallback: also listen to element show/hide (some builds emit these too)
-    if UIAction.RegisterElementListener then
-        UIAction.RegisterElementListener(id, "OnShow", "SmithsReach_CRAFT_OnShow",
-            function() System.LogAlways("[SmithsReach] CRAFT OnShow") end)
-        UIAction.RegisterElementListener(id, "OnHide", "SmithsReach_CRAFT_OnHide",
-            function() System.LogAlways("[SmithsReach] CRAFT OnHide") end)
-    end
-
-    System.LogAlways("[SmithsReach] craft_bind: bound to " ..
-        id .. " (fc_activate/ fc_deactivate; plus OnShow/OnHide fallback). "
-        .. "FC ok: " .. tostring(ok1 and ok2))
 end
 
 function SmithsReach.HookSmithery()
@@ -1141,93 +973,6 @@ function SmithsReach._StartCraftDetect()
     end
 
     Script.SetTimer(tickMs, tick)
-end
-
-function SmithsReach._StartHeartbeat()
-    local hbCfg = SmithsReach.Config.Heartbeat
-    local names = SmithsReach.Config.UI.CraftingElements
-
-    -- session-local state
-    local S = SmithsReach._Session
-    S.phase = "AwaitUI"
-    S.phaseTicks = 0
-    S.seenOpen = false
-    S.hideBeats = 0
-    S.resultBeats = 0
-    -- baseline for non-mats
-    S.NonMats_before = _filter_non_mats(_snapshot_raw_map(player, nil))
-    S.Crafted = {}
-    S.craftedSeen = false
-
-    local function beat()
-        if not (SmithsReach._Session and SmithsReach._Session.active) then return end
-        local vis, known = _any_visible(names)
-        local intervalMs = hbCfg.intervalMs
-        local function nextBeat() Script.SetTimer(intervalMs, beat) end
-        local function tryClose(reason)
-            System.LogAlways("[SmithsReach] END via " .. reason)
-            local ok, err = xpcall(SmithsReach._ForgeOnClose, debug.traceback)
-            if not ok then System.LogAlways("[SmithsReach] _ForgeOnClose ERROR:\n" .. tostring(err)) end
-        end
-
-        S.phaseTicks = S.phaseTicks + 1
-
-        if S.phase == "AwaitUI" then
-            if vis == true then
-                S.seenOpen = true
-                S.phase = "Active"; S.phaseTicks = 0
-            else
-                -- UI never appeared quickly -> grace-cancel
-                if known and (S.phaseTicks * intervalMs >= hbCfg.openGraceMs) then
-                    tryClose("UI timeout (never became visible)")
-                    return
-                end
-            end
-            nextBeat(); return
-        end
-
-        if S.phase == "Active" then
-            -- detect crafted outputs while UI visible
-            if vis == true then
-                local nonNow = _filter_non_mats(_snapshot_raw_map(player, nil))
-                local deltas = _positive_deltas(nonNow, S.NonMats_before)
-                local saw    = false
-                for cid, n in pairs(deltas) do
-                    if n > 0 then
-                        S.Crafted[cid] = (S.Crafted[cid] or 0) + n
-                        saw = true
-                    end
-                end
-                if saw then S.craftedSeen = true end
-            end
-
-            if vis == false and S.seenOpen then
-                S.hideBeats = S.hideBeats + 1
-                if S.hideBeats >= hbCfg.hideDebounceBeats then
-                    S.phase = "AwaitResult"; S.phaseTicks = 0
-                end
-            else
-                S.hideBeats = 0
-            end
-            nextBeat(); return
-        end
-
-        if S.phase == "AwaitResult" then
-            -- one last small stabilization window for result popup / inventory settle
-            S.resultBeats = S.resultBeats + 1
-            if S.resultBeats >= hbCfg.resultDebounceBeats then
-                tryClose(S.craftedSeen and "UI hidden (crafted)" or "UI hidden (no craft)")
-                return
-            end
-            nextBeat(); return
-        end
-
-        -- default
-        nextBeat()
-    end
-
-    -- small mount delay
-    Script.SetTimer(150, beat)
 end
 
 function SmithsReach._StartPoller()
