@@ -38,11 +38,6 @@ SmithsReach.Config = {
         endOnFirstCrafted   = false,          -- default: wait & settle
         completeIdleMs      = 4000            -- or 4s since last delta
     },
-    UI = {
-        CraftingElements = {
-            "ApseCraftingContent", "ApseCraftingList", "ApseModalDialog"
-        }
-    },
     -- these items are spawned to player when blacksmithing minigame begins
     CraftedIgnore = {
         classIds = {

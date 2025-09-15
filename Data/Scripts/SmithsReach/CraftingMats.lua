@@ -17,7 +17,7 @@ SmithsReach.CraftingMats = {
     ["94d8f5f1-20a7-4840-98ad-1d198d381389"] = { Name = "bsmt_ironBad", UIName = "ui_nm_bsmt_ironBad" },
     ["aa7d5131-d849-4a55-b529-5b2d3e5c575f"] = { Name = "bsmt_ironNormal", UIName = "ui_nm_bsmt_ironNormal" },
     ["b0d8f20d-53fc-47fb-a4cb-2b53f0e5c30a"] = { Name = "bsmt_pommelRing", UIName = "ui_nm_bsmt_pommelRing" },
-    ["b15a5c04-4508-46f7-8449-60760ff7b5cb"] = { Name = "bsmt_ironGood", UIName = "ui_nm_bsmt_ironGood" },
+    ["92aa6120-028e-48ee-8ed1-1c5f91afaa26"] = { Name = "bsmt_ironGood", UIName = "ui_nm_bsmt_ironGood" },
     ["b88d7fd4-ff7a-4827-ae9e-780b43b74b64"] = { Name = "bsmt_pommelWheel", UIName = "ui_nm_bsmt_pommelWheel" },
     ["c3b1cc70-fae7-43f0-9b77-51d2f0a21610"] = { Name = "bsmt_guardCross", UIName = "ui_nm_bsmt_guardCross" },
     ["c46309e5-6e01-490c-8df8-bbceebae2a66"] = { Name = "bsmt_pommelPear", UIName = "ui_nm_bsmt_pommelPear" },

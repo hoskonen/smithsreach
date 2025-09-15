@@ -756,16 +756,26 @@ function SmithsReach._ForgeOnOpen(stationEnt, user, slot)
     local cloned, clonedTotal, kinds, total = {}, 0, 0, 0
     local caps = SmithsReach.Config.PullCaps
     for cid, cnt in pairs(S_before) do
-        if kinds >= caps.max_kinds or total >= caps.max_total then break end
+        if kinds >= caps.max_kinds or clonedTotal >= caps.max_total then break end
+
         local give = math.min(cnt, caps.max_each, caps.max_total - clonedTotal)
         if give > 0 then
-            pcall(function() player.inventory:CreateItem(cid, give, 1) end)
-            cloned[cid] = give
-            clonedTotal = clonedTotal + give
+            -- spawn 'give' individual items (CreateItem spawns singletons)
+            for i = 1, give do
+                local ok = pcall(function()
+                    player.inventory:CreateItem(cid, 1, 1)
+                end)
+                if ok then
+                    cloned[cid] = (cloned[cid] or 0) + 1
+                    clonedTotal = clonedTotal + 1
+                    total       = total + 1 -- if you keep a running 'total' for logging
+                    if clonedTotal >= caps.max_total then break end
+                end
+            end
             kinds = kinds + 1
-            total = total + give
         end
     end
+
 
     -- New session UID
     SmithsReach._SessionSerial = (SmithsReach._SessionSerial or 0) + 1
@@ -1002,22 +1012,6 @@ function SmithsReach_ConfigDump()
     end
     System.LogAlways("[SmithsReach] Config dump:")
     dump(SmithsReach.Config)
-end
-
-function SmithsReach.HookCraftingUI()
-    if not (UIAction and UIAction.RegisterElementListener) then return end
-    UIAction.RegisterElementListener("ApseCraftingContent", "OnHide",
-        "SmithsReach_Crafting_OnHide",
-        function()
-            if SmithsReach._Session and SmithsReach._Session.active then
-                System.LogAlways("[SmithsReach] Blacksmithing END (ApseCraftingContent.OnHide)")
-                pcall(SmithsReach._ForgeOnClose)
-            end
-        end
-    )
-    if SmithsReach.Config.Behavior.verboseLogs then
-        System.LogAlways("[SmithsReach] Hooked ApseCraftingContent.OnHide")
-    end
 end
 
 function SmithsReach_ScanUnmatched()
