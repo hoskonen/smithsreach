@@ -124,6 +124,38 @@ local function _delete_class_units(invOwner, classId, need)
     return 0
 end
 
+local function _player_far_from(entity, distM)
+    if not entity or not player then return false end
+
+    -- Prefer Actor.CanInteractWith (game-authored proximity)
+    if SmithsReach.Config.Close.useActorCanInteract
+        and type(player.CanInteractWith) == "function" then
+        local ok, can = pcall(function() return player:CanInteractWith(entity) end)
+        if ok then return not can end
+    end
+
+    -- Fallback: Euclidean distance
+    if player.GetPos and entity.GetPos then
+        local p, s       = player:GetPos(), entity:GetPos()
+        local dx, dy, dz = p.x - s.x, p.y - s.y, p.z - s.z
+        local d2         = dx * dx + dy * dy + dz * dz
+        local r          = (distM or SmithsReach.Config.Close.distM or 6.0)
+        return d2 > (r * r)
+    end
+
+    return false
+end
+
+-- Optional extra hint (best-effort; safe if missing)
+local function _smithery_usable_again(entity)
+    if not entity then return false end
+    if type(entity.IsUsableBy) == "function" then
+        local ok, isU = pcall(function() return entity:IsUsableBy(player) end)
+        if ok then return isU == true end
+    end
+    return false
+end
+
 -- Count all inventory items that are NOT in the CraftingMats whitelist
 local function _snapshot_nonmats(ent)
     local inv = ent and ent.inventory
@@ -199,6 +231,25 @@ local function _positive_deltas(curr, base)
     end
     return d
 end
+
+local function _ignore_delta_cid(cid)
+    local ig = SmithsReach.Config.CraftedIgnore or {}
+    if (ig.classIds or {})[cid] then return true end
+
+    -- optional: fuzzy by UI name (best-effort)
+    local nm
+    if ItemManager and ItemManager.GetItemUIName then
+        local ok, got = pcall(ItemManager.GetItemUIName, cid)
+        if ok then nm = tostring(got or ""):lower() end
+    end
+    if nm and ig.namePatterns then
+        for _, pat in ipairs(ig.namePatterns) do
+            if pat ~= "" and string.find(nm, pat, 1, true) then return true end
+        end
+    end
+    return false
+end
+
 
 function SmithsReach.Init()
     -- Stash-side commands
@@ -718,10 +769,10 @@ function SmithsReach._ForgeOnOpen(stationEnt, user, slot)
 
     -- New session UID
     SmithsReach._SessionSerial = (SmithsReach._SessionSerial or 0) + 1
-    local uid = SmithsReach._SessionSerial
+    local uid                  = SmithsReach._SessionSerial
 
     -- Build the session FIRST...
-    local sess = {
+    local sess                 = {
         uid        = uid,
         active     = true,
         station_id = stationEnt and stationEnt.id or nil, -- used by proximity watcher
@@ -731,6 +782,13 @@ function SmithsReach._ForgeOnOpen(stationEnt, user, slot)
         S_before   = S_before,
         cloned     = cloned,
     }
+
+    -- session environment (used by poller/cancel logic)
+    sess.smitheryEnt           = stationEnt
+    sess.smitheryPos           = (stationEnt and stationEnt.GetPos and stationEnt:GetPos()) or
+        (player and player.GetPos and player:GetPos()) or nil
+    sess.armedAtMs             = (Game and Game.GetTimeMs and Game:GetTimeMs()) or 0
+
 
     -- ...then record the NON-material baseline AFTER cloning
     sess.NM_before = _snapshot_nonmats(player)
@@ -757,10 +815,10 @@ function SmithsReach._ForgeOnOpen(stationEnt, user, slot)
     end
 
     -- Start watchers AFTER session is set
-    if SmithsReach._StartProximityClose then SmithsReach._StartProximityClose() end
+    --if SmithsReach._StartProximityClose then SmithsReach._StartProximityClose() end
     if SmithsReach._StartCraftDetect then SmithsReach._StartCraftDetect() end
 
-    SmithsReach._StartHeartbeat()
+    SmithsReach._StartPoller() -- new poller, no UI dependency
 end
 
 function SmithsReach._ForgeOnClose()
@@ -1176,4 +1234,128 @@ function SmithsReach._StartHeartbeat()
 
     -- small mount delay
     Script.SetTimer(150, beat)
+end
+
+function SmithsReach._StartPoller()
+    local cfg      = SmithsReach.Config.Heartbeat or {}
+    local close    = SmithsReach.Config.Close or {}
+    local interval = cfg.intervalMs or 250
+
+    local S        = SmithsReach._Session
+    if not (S and S.active) then return end
+    S._ticks        = 0
+    S._settle       = 0
+    S.craftedSeen   = false
+    S.lastCraftTick = nil
+
+    local function nowMs()
+        return (Game and Game.GetTimeMs and Game:GetTimeMs()) or (S._ticks * interval)
+    end
+
+    local function far_or_usable_again()
+        -- prefer CanInteractWith; fallback to distance; OR smithery becomes usable again
+        local far = _player_far_from(S.smitheryEnt, close.distM)
+        local usable = _smithery_usable_again(S.smitheryEnt)
+        return far or usable
+    end
+
+    local function beat()
+        if not (SmithsReach._Session and SmithsReach._Session.active and SmithsReach._Session == S) then return end
+        S._ticks = S._ticks + 1
+
+        -- DEBUG heartbeat logging
+        if SmithsReach.Config.Behavior.verboseLogs and (S._ticks % 10 == 0) then
+            System.LogAlways(("[SmithsReach][HB] waiting… crafted=%s settle=%d")
+                :format(S.craftedSeen and "yes" or "no", S._settle or 0))
+        end
+
+        -- ARMING window: ignore cancel checks (walk-in animation etc.)
+        local armed                            = (nowMs() - (S.armedAtMs or 0)) >= (cfg.armMs or 1500)
+
+        -- === Detect crafted outputs (non-mats deltas) with ignore filter ===
+        local nowNM                            = _snapshot_nonmats(player)
+        local baseNM                           = S.NM_before or {}
+        local rawCount, ignoredCount, effCount = 0, 0, 0
+        local effItems                         = {}
+
+        for cid, nowCnt in pairs(nowNM) do
+            local before = baseNM[cid] or 0
+            if nowCnt > before then
+                rawCount = rawCount + 1
+                if _ignore_delta_cid(cid) then
+                    ignoredCount = ignoredCount + 1
+                    -- IMPORTANT: raise baseline for ignored cids so they don't retrigger next tick
+                    baseNM[cid] = nowCnt
+                    if SmithsReach.Config.Behavior.verboseLogs then
+                        System.LogAlways(("[SmithsReach][HB] ignore delta: cid=%s +%d (tool/work item)")
+                            :format(tostring(cid), nowCnt - before))
+                    end
+                else
+                    effCount = effCount + 1
+                    table.insert(effItems, { cid = cid, gain = nowCnt - before, total = nowCnt })
+                end
+            end
+        end
+
+        if effCount > 0 then
+            -- Log exactly what we think is crafted
+            for _, d in ipairs(effItems) do
+                local ui = (ItemManager and ItemManager.GetItemUIName and ItemManager.GetItemUIName(d.cid)) or "?"
+                System.LogAlways(("[SmithsReach][Crafted] %s (cid=%s) +%d → total=%d")
+                    :format(tostring(ui), tostring(d.cid), d.gain, d.total))
+            end
+
+            S.craftedSeen   = true
+            S.lastCraftTick = S._ticks
+            S._settle       = 0
+
+            if SmithsReach.Config.Heartbeat.endOnFirstCrafted == true then
+                System.LogAlways("[SmithsReach] END via crafted output detected")
+                xpcall(SmithsReach._ForgeOnClose, debug.traceback); return
+            end
+        else
+            -- no effective (non-ignored) deltas this tick
+            S._settle = (S._settle or 0) + 1
+        end
+
+        -- CANCEL path (only after arming): no craft ever + far/usable-again for long enough
+        if armed and not S.craftedSeen and (close.enableProximity == true) then
+            S._farTicks = (S._farTicks or 0) + (far_or_usable_again() and 1 or 0)
+            local farMs = (S._farTicks or 0) * interval
+            if farMs >= (cfg.cancelFarMs or 4000) then
+                System.LogAlways("[SmithsReach] END (cancel: far/usable-again & no craft)")
+                xpcall(SmithsReach._ForgeOnClose, debug.traceback)
+                return
+            end
+        end
+
+        -- Absolute cancel ceiling (even if still near)
+        if armed and not S.craftedSeen then
+            if (nowMs() - (S.armedAtMs or 0)) >= (cfg.cancelMaxMs or (12 * 60 * 1000)) then
+                System.LogAlways("[SmithsReach] END (cancel: absolute timeout)")
+                xpcall(SmithsReach._ForgeOnClose, debug.traceback)
+                return
+            end
+        end
+
+        -- COMPLETE path: we saw craft, then no new deltas for 'settleBeats' OR idle since last delta for long enough
+        if S.craftedSeen then
+            local cfg        = SmithsReach.Config.Heartbeat or {}
+            local settled    = (S._settle or 0) >= (cfg.settleBeats or 3)
+            local ticksSince = S.lastCraftTick and (S._ticks - S.lastCraftTick) or math.huge
+            local msSince    = ticksSince * ((cfg.intervalMs or 250))
+            local longIdle   = msSince >= (cfg.completeIdleMs or 4000)
+
+            if settled or longIdle then
+                System.LogAlways("[SmithsReach] END (complete: outputs settled)")
+                xpcall(SmithsReach._ForgeOnClose, debug.traceback); return
+            end
+        end
+
+
+        Script.SetTimer(interval, beat)
+    end
+
+    -- kick
+    Script.SetTimer(interval, beat)
 end

@@ -10,9 +10,10 @@ SmithsReach.Config = {
         fxOpenDelayMs  = 250,
     },
     Close = {
-        distM      = 2.0, -- meters before we consider you “away”
-        graceTicks = 2,   -- consecutive ticks away before closing
-        tickMs     = 200, -- polling rate
+        enableProximity = true, -- keep OFF for this branch
+        distM           = 6.0,  -- meters before we consider you “away”
+        graceTicks      = 2,    -- consecutive ticks away before closing
+        tickMs          = 200,  -- polling rate
     },
     -- Safety caps (keeps weight/ spam down)
     PullCaps = {
@@ -26,14 +27,30 @@ SmithsReach.Config = {
         maxItems = 8,     -- cap per event
     },
     Heartbeat = {
-        intervalMs = 250,
-        openGraceMs = 2500,      -- give the panel time to appear if user backed out fast
-        hideDebounceBeats = 2,   -- require # consecutive “not visible” polls
-        resultDebounceBeats = 2, -- beat(s) after result to stabilize counts
+        intervalMs          = 250,
+        openGraceMs         = 2500,           -- give the panel time to appear if user backed out fast
+        hideDebounceBeats   = 2,              -- require # consecutive “not visible” polls
+        resultDebounceBeats = 2,              -- beat(s) after result to stabilize counts
+        armMs               = 2000,           -- ignore “left” checks right after OnUsed
+        settleBeats         = 3,              -- no new output for N beats = settled
+        cancelFarMs         = 4000,           -- if far & no craft for this long → cancel
+        cancelMaxMs         = 12 * 60 * 1000, -- absolute ceiling ~12 min
+        endOnFirstCrafted   = false,          -- default: wait & settle
+        completeIdleMs      = 4000            -- or 4s since last delta
     },
     UI = {
         CraftingElements = {
             "ApseCraftingContent", "ApseCraftingList", "ApseModalDialog"
         }
+    },
+    -- these items are spawned to player when blacksmithing minigame begins
+    CraftedIgnore = {
+        classIds = {
+            ["f22b7bb9-fa73-4aa1-92e6-3943e2be7e69"] = true, -- tongs
+            ["0502824d-a654-4471-9978-c1624860dde1"] = true, -- blacksmith's hammer
+        }
+    },
+    namePatterns = {
+        "blacksmith", "tongs", "bellows", "smith", -- very conservative; adjust as needed
     }
 }
