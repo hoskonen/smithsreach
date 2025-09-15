@@ -1,9 +1,47 @@
 -- [SmithsReach/Core.lua] - minimal, cleaned
-SmithsReach = SmithsReach or {}
-SmithsReach._Session = SmithsReach._Session or { active = false }
+SmithsReach                     = SmithsReach or {}
+SmithsReach._Session            = SmithsReach._Session or { active = false }
+
+-- Facade for debug (filled by Debug.lua; safe no-ops if not loaded)
+SmithsReach.Debug               = SmithsReach.Debug or {}
+SmithsReach.Debug.Ping          = SmithsReach.Debug.Ping or
+    function() System.LogAlways("[SmithsReach] debug not loaded") end
+SmithsReach.Debug.ConfigDump    = SmithsReach.Debug.ConfigDump or
+    function() System.LogAlways("[SmithsReach] debug not loaded") end
+SmithsReach.Debug.MatsWhere     = SmithsReach.Debug.MatsWhere or
+    function() System.LogAlways("[SmithsReach] debug not loaded") end
+SmithsReach.Debug.ScanUnmatched = SmithsReach.Debug.ScanUnmatched or
+    function() System.LogAlways("[SmithsReach] debug not loaded") end
+SmithsReach.Debug.Find          = SmithsReach.Debug.Find or
+    function() System.LogAlways("[SmithsReach] debug not loaded") end
+
+SmithsReach.Debug.StashMethods  = SmithsReach.Debug.StashMethods or
+    function() System.LogAlways("[SmithsReach] debug not loaded") end
+SmithsReach.Debug.StashNames    = SmithsReach.Debug.StashNames or
+    function() System.LogAlways("[SmithsReach] debug not loaded") end
+SmithsReach.Debug.StashSummary  = SmithsReach.Debug.StashSummary or
+    function() System.LogAlways("[SmithsReach] debug not loaded") end
+SmithsReach.Debug.StashRaw      = SmithsReach.Debug.StashRaw or
+    function() System.LogAlways("[SmithsReach] debug not loaded") end
+SmithsReach.Debug.StashDump     = SmithsReach.Debug.StashDump or
+    function() System.LogAlways("[SmithsReach] debug not loaded") end
+
+SmithsReach.Debug.ItemDump      = SmithsReach.Debug.ItemDump or
+    function() System.LogAlways("[SmithsReach] debug not loaded") end
+SmithsReach.Debug.InvMethods    = SmithsReach.Debug.InvMethods or
+    function() System.LogAlways("[SmithsReach] debug not loaded") end
+SmithsReach.Debug.InvDump       = SmithsReach.Debug.InvDump or
+    function() System.LogAlways("[SmithsReach] debug not loaded") end
+SmithsReach.Debug.InvSummary    = SmithsReach.Debug.InvSummary or
+    function() System.LogAlways("[SmithsReach] debug not loaded") end
+SmithsReach.Debug.DiffStashPl   = SmithsReach.Debug.DiffStashPl or
+    function() System.LogAlways("[SmithsReach] debug not loaded") end
+
+SmithsReach.Debug.PullOne       = SmithsReach.Debug.PullOne or
+    function() System.LogAlways("[SmithsReach] debug not loaded") end
 
 -- ----- Defaults (authoritative, safe) -----
-local DEFAULTS = {
+local DEFAULTS                  = {
     Behavior = {
         showTransferFX = true,
         verboseLogs    = true,
@@ -201,36 +239,6 @@ local function _ignore_delta_cid(cid)
 end
 
 function SmithsReach.Init()
-    -- Stash-side commands
-    System.AddCCommand("smithsreach_ping", "SmithsReach_Ping()", "Ping test")
-    System.AddCCommand("smithsreach_stash_methods", "SmithsReach_StashMethods()", "Probe stash.inventory methods")
-    System.AddCCommand("smithsreach_stash_names", "SmithsReach_StashNames()", "List first N stash items with names")
-    System.AddCCommand("smithsreach_stash_summary", "SmithsReach_StashSummary()", "Summarize stash by class with names")
-    System.AddCCommand("smithsreach_stash_raw", "SmithsReach_StashRaw()", "Dump raw GetInventoryTable entry types")
-    System.AddCCommand("smithsreach_stash_dump", "SmithsReach_StashDump()", "Call stash.inventory:Dump()")
-    System.AddCCommand("smithsreach_item_dump", "SmithsReach_ItemDump()", "Dump ItemManager:GetItem(<wuid-string>)")
-
-    -- Player-side commands
-    System.AddCCommand("smithsreach_inv_methods", "SmithsReach_InvMethods()", "Probe player.inventory methods")
-    System.AddCCommand("smithsreach_inv_dump", "SmithsReach_InvDump()", "Call player.inventory:Dump()")
-    System.AddCCommand("smithsreach_inv_summary", "SmithsReach_InvSummary()",
-        "Summarize player inventory by class with names")
-    System.AddCCommand("smithsreach_pull_one", "SmithsReach_PullOne()", "Clone first item from stash into player (test)")
-
-    -- Diff
-    System.AddCCommand("smithsreach_diff_stash_pl", "SmithsReach_DiffStashPl()", "Diff stash vs player (class counts)")
-
-    -- Events
-    System.AddCCommand("smithsreach_craft_probe", "SmithsReach_CraftProbe()",
-        "Probe ApseCrafting* elements for OnShow/OnHide and FC_*")
-
-    -- Crafting FC hooks (ApseCraftingContent) ---
-    System.AddCCommand("smithsreach_craft_bind", "SmithsReach_CraftBind()",
-        "Bind to ApseCraftingContent fc_activateCrafting/fc_deactivateCrafting")
-
-    -- Config Dump
-    System.AddCCommand("smithsreach_config_dump", "SmithsReach_ConfigDump()", "Print effective SmithsReach config")
-
     if UIAction and UIAction.RegisterEventSystemListener then
         UIAction.RegisterEventSystemListener(SmithsReach, "System", "OnGameplayStarted", "OnGameplayStarted")
     end
@@ -246,17 +254,7 @@ function SmithsReach.Init()
     System.AddCCommand("smithsreach_craft_end", "SmithsReach_CraftEnd()",
         "Manually simulate blacksmithing end for testing")
 
-    -- Where are my mats? (scan whitelist across stash & player)
-    System.AddCCommand("smithsreach_mats_where", "SmithsReach_MatsWhere()",
-        "Show counts for each known mat in stash vs player")
-
-    -- Find by substring in UI/DB name (to discover things like charcoal/ore/ingot)
-    System.AddCCommand("smithsreach_find", "SmithsReach_Find()", "Usage: smithsreach_find <substring>")
-
     System.AddCCommand("smithsreach_hook_psh_end", "SmithsReach_HookPSHEnd()", "Wrap PlayerStateHandler end-of-minigame")
-
-    System.AddCCommand("smithsreach_scan_unmatched", "SmithsReach_ScanUnmatched()",
-        "List items in stash that are NOT in CraftingMats (up to 40)")
 end
 
 function SmithsReach.OnGameplayStarted(actionName, eventName, argTable)
@@ -279,227 +277,14 @@ function SmithsReach.OnGameplayStarted(actionName, eventName, argTable)
     end
 end
 
--- ---- Global wrappers (console-friendly) ----
-function SmithsReach_Ping() SmithsReach.DebugPing() end
-
-function SmithsReach_StashMethods() SmithsReach.DebugStashMethods() end
-
-function SmithsReach_StashNames() SmithsReach.DebugStashNames() end
-
-function SmithsReach_StashSummary() SmithsReach.DebugStashSummary() end
-
-function SmithsReach_StashRaw() SmithsReach.DebugStashRaw() end
-
-function SmithsReach_StashDump() SmithsReach.DebugStashDump() end
-
-function SmithsReach_ItemDump() SmithsReach.DebugItemDump() end
-
-function SmithsReach_InvMethods() SmithsReach.DebugInvMethods() end
-
-function SmithsReach_InvDump() SmithsReach.DebugInvDump() end
-
-function SmithsReach_InvSummary() SmithsReach.DebugInvSummary() end
-
-function SmithsReach_DiffStashPl() SmithsReach.DebugDiffStashPl() end
-
-function SmithsReach_PullOne() SmithsReach.DebugPullOne() end
-
+-- Global wrappers (console-friendly) ----
 function SmithsReach_HookSmithery() SmithsReach.HookSmithery() end
 
 function SmithsReach_HookMinigame() SmithsReach.HookMinigame() end
 
 function SmithsReach_CraftEnd() SmithsReach._ForgeOnClose() end
 
--- ---- Internals ----
-function SmithsReach.DebugPing()
-    System.LogAlways("[SmithsReach] ping")
-end
-
-function SmithsReach.DebugStashMethods()
-    local s = SmithsReach.Stash.GetStash()
-    if not s then
-        System.LogAlways("[SmithsReach] methods: NOT FOUND"); return
-    end
-    local inv = s.inventory
-    if not inv then
-        System.LogAlways("[SmithsReach] methods: stash has no .inventory"); return
-    end
-    local function has(name) return type(inv[name]) == "function" end
-    System.LogAlways("[SmithsReach] methods: "
-        .. "GetInventoryTable=" .. tostring(has("GetInventoryTable")) .. ", "
-        .. "FindItem=" .. tostring(has("FindItem")) .. ", "
-        .. "CreateItem=" .. tostring(has("CreateItem")) .. ", "
-        .. "AddItem=" .. tostring(has("AddItem")) .. ", "
-        .. "Dump=" .. tostring(has("Dump")))
-end
-
-function SmithsReach.DebugStashNames()
-    local s = SmithsReach.Stash.GetStash()
-    if not s then
-        System.LogAlways("[SmithsReach] names: NOT FOUND"); return
-    end
-    SmithsReach.Stash.DebugResolveNames(s, 30)
-end
-
-function SmithsReach.DebugStashSummary()
-    local s = SmithsReach.Stash.GetStash()
-    if not s then
-        System.LogAlways("[SmithsReach] summary: NOT FOUND"); return
-    end
-    SmithsReach.Stash.PrintSnapshotWithNames(s, 60)
-end
-
-function SmithsReach.DebugStashRaw()
-    local s = SmithsReach.Stash.GetStash()
-    if not s then
-        System.LogAlways("[SmithsReach] raw: NOT FOUND"); return
-    end
-    SmithsReach.Stash.DebugDumpRaw(s, 40)
-end
-
-function SmithsReach.DebugStashDump()
-    local s = SmithsReach.Stash.GetStash()
-    if not s then
-        System.LogAlways("[SmithsReach] dump: NOT FOUND"); return
-    end
-    SmithsReach.Stash.DebugDumpInventory(s)
-end
-
-function SmithsReach.DebugItemDump()
-    local args = System.GetCVarArg and System.GetCVarArg() or {}
-    local wuid = args[1]
-    if not wuid then
-        System.LogAlways("[SmithsReach] item_dump usage: smithsreach_item_dump <wuid-string>"); return
-    end
-    if not (ItemManager and ItemManager.GetItem) then
-        System.LogAlways("[SmithsReach] item_dump: ItemManager.GetItem missing"); return
-    end
-    local ok, item = pcall(function() return ItemManager.GetItem(wuid) end)
-    if not ok or not item then
-        System.LogAlways("[SmithsReach] item_dump: no item for " .. tostring(wuid)); return
-    end
-    System.LogAlways("[SmithsReach] item_dump BEGIN " .. tostring(wuid))
-    for k, v in pairs(item) do System.LogAlways(("  %s = %s"):format(tostring(k), tostring(v))) end
-    System.LogAlways("[SmithsReach] item_dump END")
-end
-
-function SmithsReach.DebugInvMethods()
-    if not player or not player.inventory then
-        System.LogAlways("[SmithsReach] inv_methods: no player/inventory"); return
-    end
-    local inv = player.inventory
-    local function has(name) return type(inv[name]) == "function" end
-    System.LogAlways("[SmithsReach] inv_methods: "
-        .. "GetInventoryTable=" .. tostring(has("GetInventoryTable")) .. ", "
-        .. "FindItem=" .. tostring(has("FindItem")) .. ", "
-        .. "CreateItem=" .. tostring(has("CreateItem")) .. ", "
-        .. "AddItem=" .. tostring(has("AddItem")) .. ", "
-        .. "Dump=" .. tostring(has("Dump")))
-end
-
-function SmithsReach.DebugInvDump()
-    if not player or not player.inventory then
-        System.LogAlways("[SmithsReach] inv_dump: no player/inventory"); return
-    end
-    if player.inventory.Dump then player.inventory:Dump() else System.LogAlways("[SmithsReach] inv_dump: no :Dump()") end
-end
-
-function SmithsReach.DebugInvSummary()
-    if not player or not player.inventory then
-        System.LogAlways("[SmithsReach] inv_summary: no player/inventory"); return
-    end
-    SmithsReach.Stash.PrintSnapshotWithNames(player, 80)
-end
-
-function SmithsReach.DebugDiffStashPl()
-    local s = SmithsReach.Stash.GetStash()
-    if not s then
-        System.LogAlways("[SmithsReach] diff: stash NOT FOUND"); return
-    end
-    if not player or not player.inventory then
-        System.LogAlways("[SmithsReach] diff: no player inv"); return
-    end
-
-    local stashMap  = SmithsReach.Stash.Snapshot(s)
-    local playerMap = SmithsReach.Stash.Snapshot(player)
-
-    local keys      = {}
-    for k in pairs(stashMap) do keys[k] = true end
-    for k in pairs(playerMap) do keys[k] = true end
-
-    local function uiName(cid)
-        if ItemManager and ItemManager.GetItemUIName then
-            local ok, name = pcall(function() return ItemManager.GetItemUIName(cid) end)
-            if ok and name then return name end
-        end
-        return tostring(cid)
-    end
-
-    System.LogAlways("[SmithsReach] diff (stash - player):")
-    local rows = 0
-    for cid in pairs(keys) do
-        local d = (stashMap[cid] or 0) - (playerMap[cid] or 0)
-        if d ~= 0 then
-            System.LogAlways(("  %s  stash=%d  player=%d  Δ=%+d"):format(uiName(cid), stashMap[cid] or 0,
-                playerMap[cid] or 0, d))
-            rows = rows + 1
-            if rows >= 100 then
-                System.LogAlways("  ... (truncated)"); break
-            end
-        end
-    end
-    if rows == 0 then System.LogAlways("  (no differences)") end
-end
-
-function SmithsReach.DebugPullOne()
-    local s = SmithsReach.Stash.GetStash()
-    if not s or not s.inventory or not player or not player.inventory then
-        System.LogAlways("[SmithsReach] pull_one: missing stash/player"); return
-    end
-
-    local invS = s.inventory
-    local invP = player.inventory
-
-    -- stash GetInventoryTable() -> array of WUIDs
-    local ok, tbl = pcall(function() return invS:GetInventoryTable() end)
-    if not ok or not tbl then
-        System.LogAlways("[SmithsReach] pull_one: no table"); return
-    end
-
-    local wuid = nil
-    for _, v in pairs(tbl) do
-        wuid = v; break
-    end
-    if not wuid then
-        System.LogAlways("[SmithsReach] pull_one: stash empty"); return
-    end
-
-    -- Resolve classId via ItemManager.GetItem(wuid)
-    if not (ItemManager and ItemManager.GetItem) then
-        System.LogAlways("[SmithsReach] pull_one: ItemManager.GetItem missing"); return
-    end
-    local okItem, itemTbl = pcall(function() return ItemManager.GetItem(wuid) end)
-    if not okItem or not itemTbl then
-        System.LogAlways("[SmithsReach] pull_one: cannot resolve item"); return
-    end
-
-    local classId = itemTbl.classId or itemTbl.class
-    if not classId then
-        System.LogAlways("[SmithsReach] pull_one: item has no classId"); return
-    end
-
-    -- Clone into player (CreateItem expects a guid/class id)
-    if invP.CreateItem then
-        local okCreate = pcall(function() invP:CreateItem(classId, 1, 1) end)
-        if okCreate and Game and Game.ShowItemsTransfer then
-            pcall(function() Game.ShowItemsTransfer(classId, 1) end)
-        end
-        System.LogAlways("[SmithsReach] pull_one: cloned " .. tostring(classId) .. " into player")
-    else
-        System.LogAlways("[SmithsReach] pull_one: player.inventory.CreateItem missing")
-    end
-end
-
+-- Internals ----
 function SmithsReach.HookSmithery()
     if not Smithery then
         System.LogAlways("[SmithsReach] HookSmithery: Smithery table not found (load order?)")
@@ -739,69 +524,6 @@ function SmithsReach._ForgeOnClose()
     sess.active = false
 end
 
-function SmithsReach_Find()
-    local args = System.GetCVarArg and System.GetCVarArg() or {}
-    local q = args[1]
-    if not q or q == "" then
-        System.LogAlways("[SmithsReach] usage: smithsreach_find <substring>"); return
-    end
-    q = string.lower(q)
-
-    local s = SmithsReach.Stash.GetStash()
-    if not (s and s.inventory) then
-        System.LogAlways("[SmithsReach] find: stash not found"); return
-    end
-    local S = SmithsReach.Stash.Snapshot(s)
-
-    local shown = 0
-    for cid, cnt in pairs(S) do
-        if cnt > 0 then
-            local ui, db = nil, nil
-            if ItemManager then
-                local okUi, uiName = pcall(function() return ItemManager.GetItemUIName(cid) end); if okUi then
-                    ui =
-                        uiName
-                end
-                local okDb, dbName = pcall(function() return ItemManager.GetItemName(cid) end); if okDb then
-                    db =
-                        dbName
-                end
-            end
-            local name = string.lower(tostring(ui or db or ""))
-            if name ~= "" and string.find(name, q, 1, true) then
-                System.LogAlways(("[SmithsReach] FIND %s (%s) x%d  class=%s"):format(tostring(ui or "?"),
-                    tostring(db or "?"), cnt, cid))
-                shown = shown + 1
-                if shown >= 60 then
-                    System.LogAlways("[SmithsReach] find: truncated"); break
-                end
-            end
-        end
-    end
-    if shown == 0 then System.LogAlways("[SmithsReach] find: no matches for '" .. q .. "' in stash") end
-end
-
-function SmithsReach_MatsWhere()
-    local s = SmithsReach.Stash.GetStash()
-    if not (s and s.inventory and player and player.inventory) then
-        System.LogAlways("[SmithsReach] mats_where: missing stash/player"); return
-    end
-    local S = SmithsReach.Stash.Snapshot(s)      -- all items by classId
-    local P = SmithsReach.Stash.Snapshot(player) -- all items by classId
-    local hits = 0
-    for cid, meta in pairs(SmithsReach.CraftingMats or {}) do
-        local sc = S[cid] or 0
-        local pc = P[cid] or 0
-        if sc > 0 or pc > 0 then
-            local name = meta.UIName or meta.Name or cid
-            System.LogAlways(("[SmithsReach] MAT %s  stash=%d  player=%d  class=%s"):format(tostring(name), sc, pc,
-                cid))
-            hits = hits + 1
-        end
-    end
-    if hits == 0 then System.LogAlways("[SmithsReach] mats_where: no Type=3 mats found in stash/player") end
-end
-
 function SmithsReach_HookPSHEnd()
     if not PlayerStateHandler then
         System.LogAlways("[SmithsReach] PSH hook: PlayerStateHandler not found")
@@ -828,43 +550,6 @@ function SmithsReach_HookPSHEnd()
 
     local any = wrapIf("EndMinigame") or wrapIf("FinishMinigame")
     System.LogAlways("[SmithsReach] PSH hook: " .. (any and "OK" or "no target functions"))
-end
-
-function SmithsReach_ConfigDump()
-    local function dump(tbl, indent)
-        indent = indent or ""
-        for k, v in pairs(tbl) do
-            if type(v) == "table" then
-                System.LogAlways(indent .. tostring(k) .. ":")
-                dump(v, indent .. "  ")
-            else
-                System.LogAlways(indent .. tostring(k) .. " = " .. tostring(v))
-            end
-        end
-    end
-    System.LogAlways("[SmithsReach] Config dump:")
-    dump(SmithsReach.Config)
-end
-
-function SmithsReach_ScanUnmatched()
-    local s = SmithsReach.Stash.GetStash()
-    if not (s and s.inventory) then
-        System.LogAlways("[SmithsReach] scan_unmatched: no stash"); return
-    end
-    local raw = SmithsReach.Stash.Snapshot(s)
-    local shown = 0
-    for cid, cnt in pairs(raw) do
-        if cnt > 0 and (not SmithsReach.CraftingMats or not SmithsReach.CraftingMats[cid]) then
-            local ui = ItemManager and ItemManager.GetItemUIName and ItemManager.GetItemUIName(cid) or nil
-            local db = ItemManager and ItemManager.GetItemName and ItemManager.GetItemName(cid) or nil
-            System.LogAlways(("[SmithsReach] UNMATCHED %s (%s) x%d  class=%s")
-                :format(tostring(ui or "?"), tostring(db or "?"), cnt, cid))
-            shown = shown + 1; if shown >= 40 then
-                System.LogAlways("[SmithsReach] scan_unmatched: truncated"); break
-            end
-        end
-    end
-    if shown == 0 then System.LogAlways("[SmithsReach] scan_unmatched: all stash kinds are whitelisted") end
 end
 
 -- Proximity-only close watcher / Terrible way to detect when blacksmithing is closed
