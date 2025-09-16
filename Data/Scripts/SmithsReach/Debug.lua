@@ -17,6 +17,14 @@ local _sum  = M._sum or
         return s
     end
 
+local function _qty_from(itm)
+    if M.Stash and M.Stash.GetQty then
+        local ok, n = pcall(M.Stash.GetQty, itm)
+        if ok and type(n) == "number" and n > 0 then return n end
+    end
+    return 1
+end
+
 local function _snap_map(entity, label, silent)
     if M.Stash and M.Stash.Snapshot then
         local ok, map = pcall(M.Stash.Snapshot, entity)
@@ -28,15 +36,15 @@ local function _snap_map(entity, label, silent)
         local ok, tbl = pcall(inv.GetInventoryTable, inv)
         if ok and type(tbl) == "table" then
             local out = {}
-            for _, w in pairs(tbl) do
-                if ItemManager and ItemManager.GetItem then
-                    local okI, t = pcall(ItemManager.GetItem, w)
-                    if okI and t then
-                        local cid = t.classId or t.class or t.type
-                        if cid then out[cid] = (out[cid] or 0) + 1 end
-                    end
+            -- inside the fallback that builds 'out' from inv:GetInventoryTable():
+            for _, itm in pairs(tbl) do
+                local cid = itm.classId or itm.class or itm.class_id
+                if cid then
+                    local q = _qty_from(itm) -- add the same helpers here (or require from Stash if available)
+                    out[cid] = (out[cid] or 0) + q
                 end
             end
+
             return out
         end
     end
@@ -351,7 +359,7 @@ end
 
 System.AddCCommand("smithsreach_diff_stash_pl", "SmithsReach.Debug.DiffStashPl()", "Diff stash vs player (class counts)")
 
--- ---- One-off helpers (moved from Core) ----
+-- One-off helpers (moved from Core)
 
 -- pull_one: clone first stash item into player (for sanity testing)
 function M.Debug.PullOne()

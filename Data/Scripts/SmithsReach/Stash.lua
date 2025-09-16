@@ -9,6 +9,46 @@ local function dbg(msg)
     end
 end
 
+-- Integer conversion (never returns nil)
+local function _to_int(v)
+    if type(v) == "number" then
+        return math.max(1, math.floor(v + 0.00001))
+    end
+    local n = tonumber(v)
+    if n then
+        return math.max(1, math.floor(n + 0.00001))
+    end
+    return 1
+end
+
+-- Common field / method names for quantities in different builds
+local _qty_keys    = { "stackCount", "StackCount", "count", "Count", "quantity", "Quantity", "amount", "Amount",
+    "charges", "Charges", "stack", "Stack" }
+local _qty_getters = { "GetStackCount", "GetCount", "GetQuantity", "GetAmount", "Count", "Quantity" }
+
+-- Returns an integer >= 1
+local function _get_qty(t)
+    -- try direct fields
+    for _, k in ipairs(_qty_keys) do
+        local v = rawget(t, k)
+        if v ~= nil then
+            local n = _to_int(v)
+            if n > 1 then return n end
+        end
+    end
+    -- try methods
+    for _, fn in ipairs(_qty_getters) do
+        local f = rawget(t, fn)
+        if type(f) == "function" then
+            local ok, v = pcall(f, t)
+            if ok and v ~= nil then
+                local n = _to_int(v)
+                if n > 1 then return n end
+            end
+        end
+    end
+    return 1
+end
 
 function M.GetStash()
     local list = System.GetEntitiesByClass("Stash") or {}
@@ -42,10 +82,11 @@ function M.Snapshot(invOrEntity)
             if okItem and t then
                 resolved = resolved + 1
                 local cid = t.classId or t.class or t.type or t.kind
+                local q = _get_qty(t) -- integer >= 1
                 if cid then
-                    out[cid] = (out[cid] or 0) + 1
+                    out[cid] = (out[cid] or 0) + q
                 else
-                    out[tostring(wuid)] = (out[tostring(wuid)] or 0) + 1
+                    out[tostring(wuid)] = (out[tostring(wuid)] or 0) + q
                 end
             end
         end
@@ -148,5 +189,7 @@ function SmithsReach.GetMaterialName(classId)
     local e = SmithsReach.CraftingMats[classId]
     return e and (e.UIName or e.Name or classId) or tostring(classId)
 end
+
+function M.GetQty(item) return _get_qty(item) end
 
 SmithsReach.Stash = M
