@@ -25,6 +25,14 @@ local function _qty_from(itm)
     return 1
 end
 
+local function _resolve_item(w)
+    if ItemManager and ItemManager.GetItem then
+        local ok, obj = pcall(ItemManager.GetItem, w)
+        if ok and type(obj) == "table" then return obj end
+    end
+    return w
+end
+
 local function _snap_map(entity, label, silent)
     if M.Stash and M.Stash.Snapshot then
         local ok, map = pcall(M.Stash.Snapshot, entity)
@@ -37,10 +45,12 @@ local function _snap_map(entity, label, silent)
         if ok and type(tbl) == "table" then
             local out = {}
             -- inside the fallback that builds 'out' from inv:GetInventoryTable():
-            for _, itm in pairs(tbl) do
-                local cid = itm.classId or itm.class or itm.class_id
+            for _, w in pairs(tbl) do
+                local item = _resolve_item(w)
+
+                local cid  = item and (item.classId or item.class or item.class_id)
                 if cid then
-                    local q = _qty_from(itm) -- add the same helpers here (or require from Stash if available)
+                    local q = _qty_from(item) -- calls M.Stash.GetQty under the hood
                     out[cid] = (out[cid] or 0) + q
                 end
             end
@@ -114,8 +124,9 @@ function M.Debug.ScanUnmatched()
     local mats = M.CraftingMats or {}
     local seen, misses = {}, 0
     for _, w in pairs(tbl) do
-        local item = ItemManager and ItemManager.GetItem and ItemManager.GetItem(w)
-        local cid  = item and (item.classId or item.class or item.type)
+        local item = _resolve_item(w)
+        local cid  = item and (item.classId or item.class or item.class_id or item.type or item.kind)
+
         if cid and not seen[cid] then
             seen[cid] = true
             if not mats[cid] then
@@ -135,12 +146,12 @@ System.AddCCommand("smithsreach_scan_unmatched", "SmithsReach.Debug.ScanUnmatche
     "Find stash smithing mats missing from table")
 
 -- 5) find (substring in UI/DB)
-function M.Debug.Find()
-    local args = System.GetCVarArg and System.GetCVarArg() or {}
-    local sub = tostring(args[1] or ""):lower()
+function M.Debug.Find(sub)
+    sub = tostring(sub or ""):lower()
     if #sub < 2 then
         System.LogAlways("[SmithsReach] find: need at least 2 chars"); return
     end
+
     local s = _stash()
     if not s or not s.inventory or not s.inventory.GetInventoryTable then
         System.LogAlways("[SmithsReach] stash not available"); return
@@ -149,22 +160,24 @@ function M.Debug.Find()
     if not ok or type(tbl) ~= "table" then
         System.LogAlways("[SmithsReach] stash read failed"); return
     end
+
     local hits = 0
     for _, w in pairs(tbl) do
-        local item = ItemManager and ItemManager.GetItem and ItemManager.GetItem(w)
-        local cid  = item and (item.classId or item.class or item.type)
+        local item = _resolve_item(w)
+        local cid  = item and (item.classId or item.class or item.class_id or item.type or item.kind)
         if cid then
-            local ui = ItemManager and ItemManager.GetItemUIName and ItemManager.GetItemUIName(cid) or "?"
-            local db = ItemManager and ItemManager.GetItemName and ItemManager.GetItemName(cid) or "?"
+            local ui = (ItemManager and ItemManager.GetItemUIName and ItemManager.GetItemUIName(cid)) or "?"
+            local db = (ItemManager and ItemManager.GetItemName and ItemManager.GetItemName(cid)) or "?"
             if (type(ui) == "string" and ui:lower():find(sub, 1, true)) or (type(db) == "string" and db:lower():find(sub, 1, true)) then
-                System.LogAlways(("[Find] %s  ui=%s  db=%s"):format(cid, ui, db)); hits = hits + 1
+                System.LogAlways(("[Find] %s  ui=%s  db=%s"):format(cid, ui, db))
+                hits = hits + 1
             end
         end
     end
     System.LogAlways(("[SmithsReach] find done. hits=%d"):format(hits))
 end
 
-System.AddCCommand("smithsreach_find", "SmithsReach.Debug.Find()", "Find stash items by name substring")
+System.AddCCommand("smithsreach_find", "SmithsReach.Debug.Find(%line)", "Find stash items by name substring")
 
 -- ---- Stash debug commands (moved from Core) ----
 
@@ -407,3 +420,87 @@ end
 
 System.AddCCommand("smithsreach_pull_one", "SmithsReach.Debug.PullOne()",
     "Clone first item from stash into player (test)")
+
+-- Resolve first N stash entries and print which quantity key/method is present.
+-- usage: smithsreach_stash_probe bsmt_copper   (or just "bsmt_")
+-- Resolve stash entries and show qty keys/methods; supports limit or substring filter.
+function SmithsReach.Debug.StashProbe(arg)
+    local M = SmithsReach
+    local s = M.Stash and M.Stash.GetStash and M.Stash.GetStash()
+    if not s or not s.inventory or not s.inventory.GetInventoryTable then
+        System.LogAlways("[SmithsReach][StashProbe] stash not available"); return
+    end
+
+    -- parse arg: number = limit, else substring filter; default limit 50
+    arg = tostring(arg or "")
+    arg = arg:match("^%s*(.-)%s*$")
+    local limit = tonumber(arg)
+    local filter = nil
+    if limit then
+        limit = math.max(1, limit)
+    else
+        filter = (arg ~= "" and arg:lower()) or nil
+        limit = 50
+    end
+
+    local ok, tbl = pcall(s.inventory.GetInventoryTable, s.inventory)
+    if not ok or type(tbl) ~= "table" then
+        System.LogAlways("[SmithsReach][StashProbe] stash read failed"); return
+    end
+
+    -- helper: resolve handle -> item table
+    local function _resolve(v)
+        if ItemManager and ItemManager.GetItem then
+            local ok2, obj = pcall(ItemManager.GetItem, v)
+            if ok2 and type(obj) == "table" then return obj end
+        end
+        return v
+    end
+
+    local function _qty(itm)
+        if M.Stash and M.Stash.GetQty then
+            local ok3, n = pcall(M.Stash.GetQty, itm)
+            if ok3 and type(n) == "number" and n > 0 then return n end
+        end
+        -- tiny local fallback
+        local v = itm.stackCount or itm.StackCount or itm.count or itm.Count
+            or itm.quantity or itm.Quantity or itm.amount or itm.Amount
+            or itm.charges or itm.Charges or itm.stack or itm.Stack
+        local n = tonumber(v) or 1
+        return (n > 0) and math.floor(n) or 1
+    end
+
+    -- count total entries
+    local total = 0
+    for _ in pairs(tbl) do total = total + 1 end
+
+    local shown, matched = 0, 0
+    for k, v in pairs(tbl) do
+        -- resolve
+        local itm  = _resolve(v)
+        local cid  = itm.classId or itm.class or itm.class_id or "?"
+        local ui   = (ItemManager and ItemManager.GetItemUIName and ItemManager.GetItemUIName(cid)) or itm.UIName or "?"
+        local db   = (ItemManager and ItemManager.GetItemName and ItemManager.GetItemName(cid)) or itm.Name or "?"
+        local q    = _qty(itm)
+
+        local hay  = (tostring(ui) .. " " .. tostring(db) .. " " .. tostring(cid)):lower()
+        local pass = (not filter) or hay:find(filter, 1, true)
+
+        if pass then
+            matched = matched + 1
+            if shown < limit then
+                shown = shown + 1
+                System.LogAlways(("[StashProbe] cid=%s  ui=%s  db=%s  q=%s"):format(cid, ui, db, tostring(q)))
+            end
+        end
+    end
+
+    System.LogAlways(("[StashProbe] matched=%d / total=%d; shown=%d (limit=%d)%s")
+        :format(matched, total, shown, limit, filter and ("; filter=\"" .. filter .. "\"") or ""))
+    if matched == 0 then
+        System.LogAlways("[StashProbe] no matches — try a broader filter or a higher limit.")
+    end
+end
+
+System.AddCCommand("smithsreach_stash_probe", "SmithsReach.Debug.StashProbe(%line)",
+    "Resolve stash entries and show quantity fields/methods")

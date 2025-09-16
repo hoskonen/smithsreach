@@ -9,45 +9,54 @@ local function dbg(msg)
     end
 end
 
--- Integer conversion (never returns nil)
+-- ── Quantity config (pin to one field/method) ────────────────────────────────
+local QTY_FIELD  = (SmithsReach.Config and SmithsReach.Config.Behavior and SmithsReach.Config.Behavior.qty_field) or
+    "amount"
+local QTY_METHOD = (SmithsReach.Config and SmithsReach.Config.Behavior and SmithsReach.Config.Behavior.qty_getter) or
+    "GetAmount"
+
+local function _ucfirst(s) return (s and s:sub(1, 1):upper() .. s:sub(2)) end
+
 local function _to_int(v)
-    if type(v) == "number" then
-        return math.max(1, math.floor(v + 0.00001))
+    if type(v) == "number" then return (v > 0) and math.floor(v + 0.00001) or 1 end
+    local n = tonumber(v); return (n and n > 0) and math.floor(n + 0.00001) or 1
+end
+
+local function _resolve(handle_or_item)
+    if type(handle_or_item) == "table" then return handle_or_item end
+    if ItemManager and ItemManager.GetItem then
+        local ok, obj = pcall(ItemManager.GetItem, handle_or_item)
+        if ok and type(obj) == "table" then return obj end
     end
-    local n = tonumber(v)
-    if n then
-        return math.max(1, math.floor(n + 0.00001))
+    return handle_or_item
+end
+
+-- Read qty using pinned field/method only (no guessing loops)
+local function _qty_from_item(itm)
+    if type(itm) ~= "table" then return 1 end
+
+    -- 1) field (amount / Amount)
+    local v = rawget(itm, QTY_FIELD) or rawget(itm, _ucfirst(QTY_FIELD))
+    if v ~= nil then return _to_int(v) end
+
+    -- 2) method (GetAmount by default)
+    local getter = rawget(itm, QTY_METHOD) or rawget(itm, _ucfirst(QTY_METHOD))
+    if type(getter) == "function" then
+        local ok, r = pcall(getter, itm)
+        if ok and r ~= nil then return _to_int(r) end
     end
+
     return 1
 end
 
--- Common field / method names for quantities in different builds
-local _qty_keys    = { "stackCount", "StackCount", "count", "Count", "quantity", "Quantity", "amount", "Amount",
-    "charges", "Charges", "stack", "Stack" }
-local _qty_getters = { "GetStackCount", "GetCount", "GetQuantity", "GetAmount", "Count", "Quantity" }
+-- Public API used by Core/Debug
+function M.GetQty(handle_or_item)
+    return _qty_from_item(_resolve(handle_or_item))
+end
 
--- Returns an integer >= 1
-local function _get_qty(t)
-    -- try direct fields
-    for _, k in ipairs(_qty_keys) do
-        local v = rawget(t, k)
-        if v ~= nil then
-            local n = _to_int(v)
-            if n > 1 then return n end
-        end
-    end
-    -- try methods
-    for _, fn in ipairs(_qty_getters) do
-        local f = rawget(t, fn)
-        if type(f) == "function" then
-            local ok, v = pcall(f, t)
-            if ok and v ~= nil then
-                local n = _to_int(v)
-                if n > 1 then return n end
-            end
-        end
-    end
-    return 1
+-- Optional: expose what we’re using (for a debug command)
+function M.GetQtyConfig()
+    return QTY_FIELD, QTY_METHOD
 end
 
 function M.GetStash()
@@ -69,20 +78,45 @@ function M.Snapshot(invOrEntity)
         dbg("Snapshot: no inventory/GetInventoryTable"); return out
     end
 
-    local ok, tbl = pcall(function() return inv:GetInventoryTable() end)
-    if not ok or not tbl then
+    local okTable, tbl = pcall(function() return inv:GetInventoryTable() end)
+    if not okTable or type(tbl) ~= "table" then
         dbg("Snapshot: table fetch failed"); return out
     end
 
     local entries, resolved = 0, 0
-    for _, wuid in pairs(tbl) do
-        entries = entries + 1
-        if ItemManager and ItemManager.GetItem then
-            local okItem, t = pcall(function() return ItemManager.GetItem(wuid) end)
+    local mats = SmithsReach and SmithsReach.CraftingMats or {}
+    local canClassCount = type(inv.GetCountOfClass) == "function"
+
+    if canClassCount then
+        -- 1) Whitelist pass
+        for cid, _ in pairs(mats) do
+            local okc, n = pcall(inv.GetCountOfClass, inv, cid)
+            if okc and type(n) == "number" and n > 0 then out[cid] = n end
+        end
+        -- 2) Discovery pass
+        local seen = {}
+        for _, wuid in pairs(tbl) do
+            entries = entries + 1
+            local okItem, t = pcall(ItemManager.GetItem, wuid)
             if okItem and t then
                 resolved = resolved + 1
-                local cid = t.classId or t.class or t.type or t.kind
-                local q = _get_qty(t) -- integer >= 1
+                local cid = t.classId or t.class or t.class_id or t.type or t.kind
+                if cid and not seen[cid] and out[cid] == nil then
+                    seen[cid] = true
+                    local okc, n = pcall(inv.GetCountOfClass, inv, cid)
+                    if okc and type(n) == "number" and n > 0 then out[cid] = n end
+                end
+            end
+        end
+    else
+        -- 3) Fallback: per-instance, but use our single source of truth for qty
+        for _, wuid in pairs(tbl) do
+            entries = entries + 1
+            local okItem, t = pcall(ItemManager.GetItem, wuid)
+            if okItem and t then
+                resolved = resolved + 1
+                local cid = t.classId or t.class or t.class_id or t.type or t.kind
+                local q = (M.GetQty and M.GetQty(t)) or 1
                 if cid then
                     out[cid] = (out[cid] or 0) + q
                 else
@@ -91,6 +125,7 @@ function M.Snapshot(invOrEntity)
             end
         end
     end
+
     dbg(("Snapshot: entries=%d resolved=%d kinds=%d"):format(entries, resolved,
         (function(t)
             local c = 0; for _ in pairs(t) do c = c + 1 end; return c
@@ -189,7 +224,5 @@ function SmithsReach.GetMaterialName(classId)
     local e = SmithsReach.CraftingMats[classId]
     return e and (e.UIName or e.Name or classId) or tostring(classId)
 end
-
-function M.GetQty(item) return _get_qty(item) end
 
 SmithsReach.Stash = M
