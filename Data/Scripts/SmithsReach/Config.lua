@@ -17,9 +17,9 @@ SmithsReach.Config = {
     },
     -- Safety caps (keeps weight/ spam down)
     PullCaps = {
-        max_kinds = 12, -- how many distinct mats to pull at most
-        max_each  = 10, -- per-class cap
-        max_total = 60, -- total items cap
+        max_kinds = 70,  -- how many distinct mats to pull at most
+        max_each  = 4,   -- per-class cap
+        max_total = 200, -- total items cap
     },
     Notif = {
         onOpen   = false, -- clone toasts (off by default to avoid spam)

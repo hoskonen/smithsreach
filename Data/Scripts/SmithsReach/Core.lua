@@ -1,6 +1,37 @@
 -- [SmithsReach/Core.lua] - minimal, cleaned
-SmithsReach                     = SmithsReach or {}
-SmithsReach._Session            = SmithsReach._Session or { active = false }
+SmithsReach          = SmithsReach or {}
+SmithsReach._Session = SmithsReach._Session or { active = false }
+
+-- Simple planner: cap per-kind, respect max_kinds, derive total budget.
+-- in:  candidates = { [cid] = stash_count }
+--      caps = { max_kinds, max_each, max_total }
+-- out: plan = { {cid=..., want=...}, ... } (sorted, truncated to max_kinds)
+--      budget = min(sum(want), caps.max_total or sum)
+local function _plan_simple(candidates, caps)
+    local max_each  = caps.max_each or 4
+    local max_kinds = caps.max_kinds or math.huge
+    local want_list = {}
+
+    for cid, cnt in pairs(candidates) do
+        local n = math.min(tonumber(cnt) or 0, max_each)
+        if n > 0 then
+            want_list[#want_list + 1] = { cid = cid, want = n }
+        end
+    end
+
+    table.sort(want_list, function(a, b) return tostring(a.cid) < tostring(b.cid) end)
+
+    if #want_list > max_kinds then
+        for i = max_kinds + 1, #want_list do want_list[i] = nil end
+    end
+
+    local sum = 0
+    for i = 1, #want_list do sum = sum + want_list[i].want end
+
+    local budget = math.min(sum, caps.max_total or sum)
+    return want_list, budget
+end
+
 
 -- Facade for debug (filled by Debug.lua; safe no-ops if not loaded)
 SmithsReach.Debug               = SmithsReach.Debug or {}
@@ -379,27 +410,34 @@ function SmithsReach._ForgeOnOpen(stationEnt, user, slot)
     -- Clone bounded mats from stash -> player (stash unchanged)
     local cloned, clonedTotal, kinds, total = {}, 0, 0, 0
     local caps = SmithsReach.Config.PullCaps
-    for cid, cnt in pairs(S_before) do
-        if kinds >= caps.max_kinds or clonedTotal >= caps.max_total then break end
 
-        local give = math.min(cnt, caps.max_each, caps.max_total - clonedTotal)
-        if give > 0 then
-            -- spawn 'give' individual items (CreateItem spawns singletons)
-            for i = 1, give do
+    -- Build a simple plan capped per-kind and derive a budget from the stash snapshot
+    local plan, budget = _plan_simple(S_before, caps)
+
+    -- Hard safety cap to avoid runaway creation (defensive)
+    local HARD_MAX = 200
+    if budget > HARD_MAX then budget = HARD_MAX end
+
+    for i = 1, #plan do
+        local cid  = plan[i].cid
+        local want = plan[i].want
+        if want > 0 then
+            kinds = kinds + 1
+            local give = math.min(want, budget - clonedTotal)
+            for j = 1, give do
                 local ok = pcall(function()
                     player.inventory:CreateItem(cid, 1, 1)
                 end)
                 if ok then
                     cloned[cid] = (cloned[cid] or 0) + 1
                     clonedTotal = clonedTotal + 1
-                    total       = total + 1 -- if you keep a running 'total' for logging
-                    if clonedTotal >= caps.max_total then break end
+                    total       = total + 1
+                    if clonedTotal >= budget then break end
                 end
             end
-            kinds = kinds + 1
+            if clonedTotal >= budget then break end
         end
     end
-
 
     -- New session UID
     SmithsReach._SessionSerial = (SmithsReach._SessionSerial or 0) + 1
