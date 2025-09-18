@@ -504,3 +504,18 @@ end
 
 System.AddCCommand("smithsreach_stash_probe", "SmithsReach.Debug.StashProbe(%line)",
     "Resolve stash entries and show quantity fields/methods")
+
+function SmithsReach.Debug.BedOwnedProbe()
+    local player = SmithsReach.Util.Player()
+    local B = SmithsReach.Config.Behavior or {}
+    local bed, d = SmithsReach_FindOwnedBedNear(player, B.bedgate_radius_m or 10)
+    if bed then
+        System.LogAlways(("[SmithsReach] Owned bed detected: %s (%.2fm)")
+            :format(bed.GetName and bed:GetName() or tostring(bed.id), d))
+    else
+        System.LogAlways("[SmithsReach] No owned bed in radius.")
+    end
+end
+
+System.AddCCommand("smithsreach_bed_owned_probe", "SmithsReach.Debug.BedOwnedProbe()",
+    "Detect owned (sleep & save) bed near you")

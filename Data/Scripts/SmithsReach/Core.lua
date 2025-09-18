@@ -84,11 +84,7 @@ local DEFAULTS = {
         showTransferFX = true,
         verboseLogs    = true,
     },
-    PullCaps = {
-        max_kinds = 12,
-        max_each  = 10,
-        max_total = 60,
-    },
+    PullCaps = { max_kinds = 70, max_each = 4, max_total = 200 }
 }
 
 -- shallow+deep fill without clobbering user config
@@ -200,7 +196,7 @@ local function _delete_class_units(invOwner, classId, need)
     return 0
 end
 
-local function _player_far_from(entity, distM)
+local function _player_far_from(entity, distM, player)
     if not entity or not player then return false end
 
     -- Prefer Actor.CanInteractWith (game-authored proximity)
@@ -223,8 +219,8 @@ local function _player_far_from(entity, distM)
 end
 
 -- Optional extra hint (best-effort; safe if missing)
-local function _smithery_usable_again(entity)
-    if not entity then return false end
+local function _smithery_usable_again(entity, player)
+    if not entity or not player then return false end
     if type(entity.IsUsableBy) == "function" then
         local ok, isU = pcall(function() return entity:IsUsableBy(player) end)
         if ok then return isU == true end
@@ -293,6 +289,118 @@ function SmithsReach.Init()
         "Manually simulate blacksmithing end for testing")
 
     System.AddCCommand("smithsreach_hook_psh_end", "SmithsReach_HookPSHEnd()", "Wrap PlayerStateHandler end-of-minigame")
+end
+
+-- Find an OWNED bed (Sleep & Save) within radius of the given anchor entity (e.g., the stash).
+-- strict: only beds that show "Sleep & Save"
+local function _owned_bed_near_anchor(anchorEnt, radius)
+    if not anchorEnt then return false, math.huge end
+    if not (EntityModule and EntityModule.WillSleepingOnThisBedSave) then
+        return false, math.huge
+    end
+
+    local av = SmithsReach.Util.Pos(anchorEnt)
+    if not av then return false, math.huge end
+
+    local list = (System.GetEntitiesInSphere and System.GetEntitiesInSphere(av, radius))
+        or (System.GetEntities and System.GetEntities()) or {}
+    local best = math.huge
+
+    for _, e in pairs(list) do
+        if e and (e.class == "Bed" or e.OnUsed or e.OnUsedHold) then
+            local owned = EntityModule.WillSleepingOnThisBedSave(e.id)
+            if owned then
+                local ev = SmithsReach.Util.Pos(e)
+                if ev then
+                    local d = SmithsReach.Util.DistPos(ev, av)
+                    if d < best then best = d end
+                end
+            end
+        end
+    end
+
+    return (best ~= math.huge and best <= radius), (best ~= math.huge) and best or math.huge
+end
+
+local function _stash_ok(player, baseR, pad)
+    local stash = SmithsReach.Stash and SmithsReach.Stash.GetStash and SmithsReach.Stash.GetStash()
+    if not stash then return false, math.huge, nil end
+    local d = SmithsReach.Util.DistEnt(player, stash)
+    return d <= (baseR + (pad or 0)), d, stash
+end
+
+-- bed_ok that anchors to stash when available (or the player otherwise)
+local function _bed_ok(player, baseR, pad, stashEnt)
+    local B = SmithsReach.Config.Behavior or {}
+    local radius = (baseR + (pad or 0))
+
+    local anchor = (B.forgeBedSearch == "stash" and stashEnt) or player
+    if not anchor then return false, math.huge end
+
+    -- try strict owned-bed search near the chosen anchor
+    local ok, d = _owned_bed_near_anchor(anchor, radius)
+    if ok then return true, d end
+
+    -- optional relaxed fallback if you want (toggle via B.forgeBedStrict)
+    if B.forgeBedStrict == false then
+        local av = SmithsReach.Util.Pos(anchor)
+        if not av then return false, math.huge end
+        local list = (System.GetEntitiesInSphere and System.GetEntitiesInSphere(av, radius))
+            or (System.GetEntities and System.GetEntities()) or {}
+        local best = math.huge
+        for _, e in pairs(list) do
+            if e and (e.class == "Bed" or e.OnUsed or e.OnUsedHold) then
+                local ev = SmithsReach.Util.Pos(e)
+                if ev then
+                    local d2 = SmithsReach.Util.DistPos(ev, av)
+                    if d2 < best then best = d2 end
+                end
+            end
+        end
+        return (best ~= math.huge and best <= radius), (best ~= math.huge) and best or math.huge
+    end
+
+    return false, math.huge
+end
+
+function SmithsReach_CheckForgeGate(is_close_phase)
+    local B = SmithsReach.Config.Behavior or {}
+    if not B.forgeProximityEnabled then return true end
+
+    local player = SmithsReach.Util.Player()
+    if not player then return false end
+
+    local baseR                     = B.forgeProximityRadiusM or 12
+    local pad                       = (is_close_phase and (B.forgeGateClosePadM or 3.0)) or (B.forgeGateOpenPadM or 1.0)
+
+    -- 1) stash check (and keep the stash entity for bed anchoring)
+    local stashOK, dStash, stashEnt = _stash_ok(player, baseR, pad)
+
+    -- 2) bed check relative to stash (preferred) or player
+    local bedOK, dBed               = false, math.huge
+    if B.forgeNeedOwnedBed ~= false then
+        bedOK, dBed = _bed_ok(player, baseR, pad, stashEnt)
+    end
+
+    local mode = B.forgeGateMode or "either"
+    local pass =
+        (mode == "either" and (stashOK or bedOK)) or
+        (mode == "both" and (stashOK and bedOK)) or
+        (mode == "stash" and stashOK) or false
+
+    if pass then
+        if B.verboseLogs then
+            System.LogAlways(("[SmithsReach] Gate OK (%s): stash=%.1fm, bed=%.1fm (≤ %.1f+%.1f)")
+                :format(mode, dStash or -1, dBed or -1, baseR, pad))
+        end
+        return true
+    else
+        if B.verboseLogs ~= false then
+            System.LogAlways(("[SmithsReach] Gate blocked (%s): stash=%.1fm, bed=%.1fm (r=%.1f+%.1f)")
+                :format(mode, dStash or -1, dBed or -1, baseR, pad))
+        end
+        return false
+    end
 end
 
 function SmithsReach.OnGameplayStarted(actionName, eventName, argTable)
@@ -391,6 +499,15 @@ end
 
 function SmithsReach._ForgeOnOpen(stationEnt, user, slot)
     System.LogAlways("[SmithsReach] _ForgeOnOpen: enter")
+    local player = SmithsReach.Util.Player()
+    if not SmithsReach_CheckForgeGate(false) then
+        -- Optional: clarity log
+        local B = SmithsReach.Config.Behavior or {}
+        if B.verboseLogs ~= false then
+            System.LogAlways("[SmithsReach] Gate blocked on OPEN – transfers disabled.")
+        end
+        return -- ✅ nothing cloned
+    end
 
     -- Soft-restart if a session was left active
     if SmithsReach._Session and SmithsReach._Session.active then
@@ -468,9 +585,9 @@ function SmithsReach._ForgeOnOpen(stationEnt, user, slot)
     -- Publish the session
     SmithsReach._Session = sess
 
-    local kinds, clonedTotal = _k(cloned), clonedTotal -- existing locals
     VLOG("OPEN: player %d/%d  stash %d/%d  cloned %d kinds / %d items",
-        _k(P_before), _sum(P_before), _k(S_before), _sum(S_before), kinds, clonedTotal)
+        _k(P_before), _sum(P_before), _k(S_before), _sum(S_before), _k(cloned), clonedTotal)
+
     if not (SmithsReach.Config.Behavior or {}).verboseLogs then
         LOG("OPEN: cloned %d kinds / %d items", kinds, clonedTotal)
     end
@@ -498,15 +615,26 @@ function SmithsReach._ForgeOnOpen(stationEnt, user, slot)
 end
 
 function SmithsReach._ForgeOnClose()
+    if not SmithsReach_CheckForgeGate(true) then
+        local B = SmithsReach.Config.Behavior or {}
+        if B.verboseLogs ~= false then
+            System.LogAlways("[SmithsReach] Gate blocked on CLOSE – nothing to reconcile.")
+        end
+        return -- ✅ no stash reconciliation / return
+    end
     local sess = SmithsReach._Session
     if not (sess and sess.active) then
         System.LogAlways("[SmithsReach] CLOSE: no active session"); return
     end
 
+    local player = SmithsReach.Util.Player()
+
     local stashEnt = System.GetEntity and System.GetEntity(sess.stash_id)
     if not (stashEnt and stashEnt.inventory and player and player.inventory) then
         System.LogAlways("[SmithsReach] CLOSE: missing stash/player"); sess.active = false; return
     end
+
+    if not SmithsReach_CheckForgeGate(true) then return end
 
     -- AFTER snapshot
     local P_after            = _matSnapshot(player, "INV")
@@ -727,9 +855,9 @@ function SmithsReach._StartPoller()
     end
 
     local function far_or_usable_again()
-        -- prefer CanInteractWith; fallback to distance; OR smithery becomes usable again
-        local far = _player_far_from(S.smitheryEnt, close.distM)
-        local usable = _smithery_usable_again(S.smitheryEnt)
+        local pl = System.GetEntity(S.player_id)
+        local far = _player_far_from(S.smitheryEnt, close.distM, pl)
+        local usable = _smithery_usable_again(S.smitheryEnt, pl)
         return far or usable
     end
 
@@ -747,7 +875,7 @@ function SmithsReach._StartPoller()
         local armed                            = (nowMs() - (S.armedAtMs or 0)) >= (cfg.armMs or 1500)
 
         -- === Detect crafted outputs (non-mats deltas) with ignore filter ===
-        local nowNM                            = _snapshot_nonmats(player)
+        local nowNM                            = _snapshot_nonmats(pl)
         local baseNM                           = S.NM_before or {}
         local rawCount, ignoredCount, effCount = 0, 0, 0
         local effItems                         = {}
@@ -779,6 +907,9 @@ function SmithsReach._StartPoller()
                     (ItemManager and ItemManager.GetItemUIName and ItemManager.GetItemUIName(d.cid)) or "?",
                     tostring(d.cid), d.gain, d.total)
             end
+
+            local totalGain = 0
+            for _, d in ipairs(effItems) do totalGain = totalGain + (d.gain or 0) end
             if not (SmithsReach.Config.Behavior or {}).verboseLogs then
                 LOG("CRAFTED: +%d item(s)", totalGain)
             end

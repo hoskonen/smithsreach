@@ -4,10 +4,19 @@ SmithsReach = SmithsReach or {}
 SmithsReach.Config = {
     -- QoL behavior
     Behavior = {
-        showTransferFX = true, -- Game.ShowItemsTransfer(...) when cloning
-        verboseLogs    = false,
-        fxAtClose      = true, -- if true, use the queue; if false, show inline (maybe with delay)
-        fxOpenDelayMs  = 250,
+        showTransferFX        = true, -- Game.ShowItemsTransfer(...) when cloning
+        verboseLogs           = false,
+        fxAtClose             = true, -- if true, use the queue; if false, show inline (maybe with delay)
+        fxOpenDelayMs         = 250,
+        -- Bed and stash detection
+        forgeProximityEnabled = true,
+        forgeProximityRadiusM = 12,      -- base radius
+        forgeNeedOwnedBed     = true,    -- allow bed to satisfy gate
+        forgeGateMode         = "both",  -- "either" | "both" | "stash"
+        forgeGateOpenPadM     = 1.0,     -- extra meters for opening
+        forgeGateClosePadM    = 3.0,     -- extra meters for staying open
+        forgeBedSearch        = "stash", -- "stash" | "player"
+        forgeBedStrict        = true     -- require Sleep&Save bed (WillSleepingOnThisBedSave)
     },
     Close = {
         enableProximity = true, -- keep OFF for this branch

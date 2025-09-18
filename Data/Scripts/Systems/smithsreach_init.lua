@@ -1,3 +1,4 @@
+Script.ReloadScript("scripts/SmithsReach/Util.lua")
 Script.ReloadScript("scripts/SmithsReach/Config.lua")
 Script.ReloadScript("scripts/SmithsReach/CraftingMats.lua")
 Script.ReloadScript("scripts/SmithsReach/Stash.lua")
