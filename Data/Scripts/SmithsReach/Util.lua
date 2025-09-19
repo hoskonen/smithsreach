@@ -22,3 +22,24 @@ function SmithsReach.Util.DistEnt(aEnt, bEnt)
     local ap, bp = SmithsReach.Util.Pos(aEnt), SmithsReach.Util.Pos(bEnt)
     return SmithsReach.Util.DistPos(ap, bp)
 end
+
+-- New: experiment for perk detection
+function SmithsReach.Util.DebugListPerks(stat)
+    local pl = SmithsReach.Util.Player()
+    if not pl or not pl.soul or not pl.soul.GetDerivedStat then
+        System.LogAlways("[SmithsReach] DebugListPerks: no player or soul")
+        return
+    end
+
+    local perks = {}
+    local val = pl.soul:GetDerivedStat(stat or "maintenance", nil, perks)
+    System.LogAlways(("[SmithsReach] DerivedStat %s = %s"):format(stat or "maintenance", tostring(val)))
+
+    if type(perks) == "table" then
+        for i, perk in ipairs(perks) do
+            System.LogAlways(("[SmithsReach] perk[%d] = %s"):format(i, tostring(perk)))
+        end
+    else
+        System.LogAlways("[SmithsReach] no perks returned")
+    end
+end

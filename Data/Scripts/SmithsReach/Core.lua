@@ -382,6 +382,31 @@ function SmithsReach_CheckForgeGate(is_close_phase)
         bedOK, dBed = _bed_ok(player, baseR, pad, stashEnt)
     end
 
+    -- 3) skill gate (use blacksmithing; fall back to maintenance)
+    if B.requireMaintenanceLevel then
+        local lvl = 0
+        if player and player.soul then
+            if type(player.soul.GetSkillLevel) == "function" then
+                local ok, res = pcall(player.soul.GetSkillLevel, player.soul, "repairing")
+                if ok and type(res) == "number" then
+                    lvl = res
+                else
+                    -- fallback: maintenance (some builds)
+                    ok, res = pcall(player.soul.GetSkillLevel, player.soul, "maintenance")
+                    if ok and type(res) == "number" then lvl = res end
+                end
+            end
+        end
+        local need = B.requiredMaintenanceLevel or 15
+        if lvl < need then
+            if B.verboseLogs ~= false then
+                System.LogAlways(("[SmithsReach] Gate blocked: smithing skill %d < required %d")
+                    :format(lvl, need))
+            end
+            return false
+        end
+    end
+
     local mode = B.forgeGateMode or "either"
     local pass =
         (mode == "either" and (stashOK or bedOK)) or
@@ -633,8 +658,6 @@ function SmithsReach._ForgeOnClose()
     if not (stashEnt and stashEnt.inventory and player and player.inventory) then
         System.LogAlways("[SmithsReach] CLOSE: missing stash/player"); sess.active = false; return
     end
-
-    if not SmithsReach_CheckForgeGate(true) then return end
 
     -- AFTER snapshot
     local P_after            = _matSnapshot(player, "INV")
