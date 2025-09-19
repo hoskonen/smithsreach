@@ -31,6 +31,87 @@ local function _resolve(handle_or_item)
     return handle_or_item
 end
 
+-- Returns player's WUID or nil
+local function _player_wuid()
+    local pl = SmithsReach.Util.Player()
+    if not pl then return nil end
+    local ok, wuid = pcall(XGenAIModule.GetMyWUID, pl)
+    return ok and Framework.IsValidWUID and Framework.IsValidWUID(wuid) and wuid or nil
+end
+
+-- Score a stash for "is this the player's main stash?"
+local function _score_player_stash(stash)
+    local info = StashInventoryCollector.GetStashInformation(stash)
+    -- hard filters
+    if info.isShopStash then return -math.huge end
+
+    local score = 0
+    -- primary: master stash network (player stash system)
+    if info.isMasterStash then score = score + 1000 else score = score - 100 end
+
+    -- owner preference (if resolvable)
+    local pw = (function()
+        local pl = SmithsReach.Util.Player()
+        if not pl then return nil end
+        local ok, wuid = pcall(XGenAIModule.GetMyWUID, pl)
+        return ok and wuid or nil
+    end)()
+    local ctx = { wuid = StashInventoryCollector.GetStashWuid(stash) }
+    ctx.owner = StashInventoryCollector.GetStashOwner(ctx)
+    if pw and ctx.owner == pw then score = score + 200 end
+
+    -- small context nudge (optional)
+    if info.contextLabel and (info.contextLabel == "bedside" or info.contextLabel == "workshop") then
+        score = score + 15
+    end
+
+    return score
+end
+
+
+-- Find the best candidate near player (2D radius), falling back to global best if needed
+function M.FindBestPlayerStashNear(player, searchRadiusM)
+    local best, bestScore, bestD = nil, -math.huge, math.huge
+    local pp = SmithsReach.Util.Pos(player)
+    if not pp then return nil, math.huge end
+
+    local all = System.GetEntitiesByClass and System.GetEntitiesByClass("Stash") or {}
+    for _, s in pairs(all) do
+        if s and s.inventory and s.inventory.GetInventoryTable then
+            local sc = _score_player_stash(s)
+            if sc > -math.huge then
+                local d = SmithsReach.Util.DistPos2D(SmithsReach.Util.Pos(s), pp)
+                -- prioritize within radius; otherwise consider farther only if no near hit
+                local inRange = (tonumber(searchRadiusM) and d <= searchRadiusM) or false
+                local tie = (sc == bestScore) and (d < bestD)
+                if (inRange and (sc > bestScore or tie)) or (best == nil and (sc > bestScore or tie)) then
+                    best, bestScore, bestD = s, sc, d
+                end
+            end
+        end
+    end
+    return best, bestD
+end
+
+-- Preferred-or-best stash used by Core
+function M.GetPreferredOrBestStash(player, radiusM)
+    -- preferred binding wins if valid
+    if M._preferredStashId then
+        local e = System.GetEntity and System.GetEntity(M._preferredStashId)
+        if e and e.inventory and e.inventory.GetInventoryTable then
+            return e
+        end
+    end
+    -- try smart resolver
+    local s = nil
+    if M.FindBestPlayerStashNear then
+        s = M.FindBestPlayerStashNear(player, radiusM or 30)
+        if type(s) == "table" then s = s end
+    end
+    -- fallback legacy
+    return s or (M.GetStash and M.GetStash() or nil)
+end
+
 -- Read qty using pinned field/method only (no guessing loops)
 local function _qty_from_item(itm)
     if type(itm) ~= "table" then return 1 end
@@ -47,6 +128,36 @@ local function _qty_from_item(itm)
     end
 
     return 1
+end
+
+-- Names we consider "player stash" (extend if needed)
+local STASH_KEYS = { "playerMasterChest", "player_master_chest", "playerChest", "playerStash" }
+
+local function _is_player_stash_name(nm)
+    if type(nm) ~= "string" then return false end
+    for _, key in ipairs(STASH_KEYS) do
+        if nm:find(key, 1, true) then return true end
+    end
+    return false
+end
+
+function M.FindPlayerStashNear(player, maxRadius)
+    local best, bestD2 = nil, math.huge
+    local list = System.GetEntitiesByClass and System.GetEntitiesByClass("Stash") or {}
+    local ppos = SmithsReach.Util.Pos(player)
+    for _, e in pairs(list) do
+        local nm = (EntityUtils and EntityUtils.GetName and EntityUtils.GetName(e)) or (e.GetName and e:GetName()) or ""
+        if _is_player_stash_name(nm) then
+            if e.inventory and e.inventory.GetInventoryTable then
+                local d2 = SmithsReach.Util.DistPos2D(SmithsReach.Util.Pos(e), ppos)
+                if d2 < bestD2 then best, bestD2 = e, d2 end
+            end
+        end
+    end
+    if best and (not maxRadius or bestD2 <= maxRadius) then
+        return best, bestD2
+    end
+    return nil, math.huge
 end
 
 -- Public API used by Core/Debug

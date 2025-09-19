@@ -10,15 +10,15 @@ SmithsReach.Config = {
         fxOpenDelayMs              = 250,
         -- Immersion / Bed and stash detection, Maintenance Level Req
         forgeProximityEnabled      = true,
-        forgeProximityRadiusM      = 12,     -- base radius
-        forgeNeedOwnedBed          = true,   -- allow bed to satisfy gate
-        forgeGateMode              = "both", -- "either" | "both" | "stash"
-        forgeGateOpenPadM          = 1.0,    -- extra meters for opening
-        forgeGateClosePadM         = 3.0,    -- extra meters for staying open
+        forgeProximityRadiusM      = 14,      -- base radius
+        forgeNeedOwnedBed          = true,    -- allow bed to satisfy gate
+        forgeGateMode              = "both",  -- "either" | "both" | "stash"
+        forgeGateOpenPadM          = 1.0,     -- extra meters for opening
+        forgeGateClosePadM         = 3.0,     -- extra meters for staying open
         forgeBedSearch             = "stash", -- "stash" | "player"
-        forgeBedStrict             = true,   -- require Sleep&Save bed (WillSleepingOnThisBedSave)
-        requireCraftsmanshipLevel  = true,   -- enable level gate
-        requiredCrafstmanshipLevel = 15      -- threshold
+        forgeBedStrict             = true,    -- require Sleep&Save bed (WillSleepingOnThisBedSave)
+        requireCraftsmanshipLevel  = true,    -- enable level gate
+        requiredCrafstmanshipLevel = 15       -- threshold
     },
     Close = {
         enableProximity = true, -- keep OFF for this branch

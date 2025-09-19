@@ -32,7 +32,6 @@ local function _plan_simple(candidates, caps)
     return want_list, budget
 end
 
-
 -- Facade for debug (filled by Debug.lua; safe no-ops if not loaded)
 SmithsReach.Debug               = SmithsReach.Debug or {}
 SmithsReach.Debug.Ping          = SmithsReach.Debug.Ping or
@@ -77,7 +76,6 @@ local function VLOG(fmt, ...)
     if B.verboseLogs then LOG(fmt, ...) end
 end
 
-
 -- ----- Defaults (authoritative, safe) -----
 local DEFAULTS = {
     Behavior = {
@@ -102,9 +100,6 @@ end
 -- Ensure config table exists (Config.lua should create it; this backs it up)
 SmithsReach.Config = SmithsReach.Config or {}
 _deep_fill(SmithsReach.Config, DEFAULTS)
-
--- (optional) quick sanity log
--- System.LogAlways("[SmithsReach] Config effective: kinds="..tostring(SmithsReach.Config.PullCaps.max_kinds))
 
 local function _filterMats(raw)
     local out = {}
@@ -323,11 +318,18 @@ local function _owned_bed_near_anchor(anchorEnt, radius)
 end
 
 local function _stash_ok(player, baseR, pad)
-    local stash = SmithsReach.Stash and SmithsReach.Stash.GetStash and SmithsReach.Stash.GetStash()
-    if not stash then return false, math.huge, nil end
-    local d = SmithsReach.Util.DistEnt(player, stash)
-    return d <= (baseR + (pad or 0)), d, stash
+    local r = baseR + (pad or 0)
+    local stash, d2d = nil, math.huge
+    if SmithsReach.Stash and SmithsReach.Stash.FindBestPlayerStashNear then
+        stash, d2d = SmithsReach.Stash.FindBestPlayerStashNear(player, r * 3) -- search a bit wider
+    end
+    if not stash and SmithsReach.Stash and SmithsReach.Stash.GetPreferredOrLegacyStash then
+        stash = SmithsReach.Stash.GetPreferredOrLegacyStash(player, r * 3)
+        if stash then d2d = SmithsReach.Util.DistEnt2D(player, stash) end
+    end
+    return (stash ~= nil) and (d2d <= r), d2d or math.huge, stash
 end
+
 
 -- bed_ok that anchors to stash when available (or the player otherwise)
 local function _bed_ok(player, baseR, pad, stashEnt)

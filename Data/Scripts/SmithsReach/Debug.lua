@@ -519,3 +519,25 @@ end
 
 System.AddCCommand("smithsreach_bed_owned_probe", "SmithsReach.Debug.BedOwnedProbe()",
     "Detect owned (sleep & save) bed near you")
+
+function SmithsReach.Debug.StashScan(radius)
+    radius = tonumber(radius) or 30
+    local p = SmithsReach.Util.Player()
+    if not (p and System.GetEntitiesInSphere) then return end
+    local pp = SmithsReach.Util.Pos(p)
+    System.LogAlways(("[SmithsReach] StashScan: %.1fm"):format(radius))
+    for _, e in pairs(System.GetEntitiesInSphere(pp, radius) or {}) do
+        if e and e.inventory and e.inventory.GetInventoryTable then
+            local info = StashInventoryCollector.GetStashInformation(e)
+            local nm = (e.GetName and e:GetName()) or "?"
+            local d2 = SmithsReach.Util.DistPos2D(SmithsReach.Util.Pos(e), pp)
+            System.LogAlways(("[Stash] d=%.1fm name=%s class=%s master=%s shop=%s ctx=%s interior=%s")
+                :format(d2, nm, tostring(e.class),
+                    tostring(info.isMasterStash), tostring(info.isShopStash),
+                    tostring(info.contextLabel.value), tostring(info.isInterior)))
+        end
+    end
+end
+
+System.AddCCommand("smithsreach_stash_scan", "SmithsReach.Debug.StashScan(%line)",
+    "Scan nearby stashes with master/shop flags")
