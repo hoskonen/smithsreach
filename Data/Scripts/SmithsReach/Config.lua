@@ -4,21 +4,21 @@ SmithsReach = SmithsReach or {}
 SmithsReach.Config = {
     -- QoL behavior
     Behavior = {
-        showTransferFX           = true, -- Game.ShowItemsTransfer(...) when cloning
-        verboseLogs              = true,
-        fxAtClose                = true, -- if true, use the queue; if false, show inline (maybe with delay)
-        fxOpenDelayMs            = 250,
+        showTransferFX             = true, -- Game.ShowItemsTransfer(...) when cloning
+        verboseLogs                = true,
+        fxAtClose                  = true, -- if true, use the queue; if false, show inline (maybe with delay)
+        fxOpenDelayMs              = 250,
         -- Immersion / Bed and stash detection, Maintenance Level Req
-        forgeProximityEnabled    = true,
-        forgeProximityRadiusM    = 12,   -- base radius
-        forgeNeedOwnedBed        = true, -- allow bed to satisfy gate
-        forgeGateMode            = "both", -- "either" | "both" | "stash"
-        forgeGateOpenPadM        = 1.0,  -- extra meters for opening
-        forgeGateClosePadM       = 3.0,  -- extra meters for staying open
-        forgeBedSearch           = "stash", -- "stash" | "player"
-        forgeBedStrict           = true, -- require Sleep&Save bed (WillSleepingOnThisBedSave)
-        requireMaintenanceLevel  = true, -- enable level gate
-        requiredMaintenanceLevel = 15    -- threshold
+        forgeProximityEnabled      = true,
+        forgeProximityRadiusM      = 12,     -- base radius
+        forgeNeedOwnedBed          = true,   -- allow bed to satisfy gate
+        forgeGateMode              = "both", -- "either" | "both" | "stash"
+        forgeGateOpenPadM          = 1.0,    -- extra meters for opening
+        forgeGateClosePadM         = 3.0,    -- extra meters for staying open
+        forgeBedSearch             = "stash", -- "stash" | "player"
+        forgeBedStrict             = true,   -- require Sleep&Save bed (WillSleepingOnThisBedSave)
+        requireCraftsmanshipLevel  = true,   -- enable level gate
+        requiredCrafstmanshipLevel = 15      -- threshold
     },
     Close = {
         enableProximity = true, -- keep OFF for this branch

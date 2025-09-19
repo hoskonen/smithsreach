@@ -383,24 +383,20 @@ function SmithsReach_CheckForgeGate(is_close_phase)
     end
 
     -- 3) skill gate (use blacksmithing; fall back to maintenance)
-    if B.requireMaintenanceLevel then
+    if B.requireCraftsmanshipLevel then
         local lvl = 0
         if player and player.soul then
             if type(player.soul.GetSkillLevel) == "function" then
-                local ok, res = pcall(player.soul.GetSkillLevel, player.soul, "repairing")
+                local ok, res = pcall(player.soul.GetSkillLevel, player.soul, "craftsmanship")
                 if ok and type(res) == "number" then
                     lvl = res
-                else
-                    -- fallback: maintenance (some builds)
-                    ok, res = pcall(player.soul.GetSkillLevel, player.soul, "maintenance")
-                    if ok and type(res) == "number" then lvl = res end
                 end
             end
         end
-        local need = B.requiredMaintenanceLevel or 15
+        local need = B.requiredCraftsmanshipLevel or 15
         if lvl < need then
             if B.verboseLogs ~= false then
-                System.LogAlways(("[SmithsReach] Gate blocked: smithing skill %d < required %d")
+                System.LogAlways(("[SmithsReach] Gate blocked: craftsmanship skill %d < required %d")
                     :format(lvl, need))
             end
             return false
@@ -529,7 +525,7 @@ function SmithsReach._ForgeOnOpen(stationEnt, user, slot)
         -- Optional: clarity log
         local B = SmithsReach.Config.Behavior or {}
         if B.verboseLogs ~= false then
-            System.LogAlways("[SmithsReach] Gate blocked on OPEN – transfers disabled.")
+            System.LogAlways("[SmithsReach] Gate blocked on OPEN - transfers disabled.")
         end
         return -- ✅ nothing cloned
     end
