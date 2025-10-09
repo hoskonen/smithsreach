@@ -64,4 +64,6 @@ SmithsReach.CraftingMats = {
     ["613dd45e-a7e3-4ebb-b638-5d4c544c1798"] = { Name = "bsmt_tinkal", UIName = "ui_nm_bsmt_tinkal" },
     ["7584e83a-4329-4fcb-94a6-eb3c9af2390c"] = { Name = "dlc2_brokenIronRod", UIName = "ui_nm_dlc2_brokenIronRod" },
     ["630691ae-f0d0-4207-9bde-395ea4f374cc"] = { Name = "kovarskeZakazky_magdalenaBrokenAxe", UIName = "ui_nm_kovarskeZakazky_magdalenaBrokenAxe" },
+    ["3db25e6e-dfe2-4b06-a079-80e6064073c4"] = { Name = "special_attire", UIName = "ui_nm_special_attire" },
+
 }
